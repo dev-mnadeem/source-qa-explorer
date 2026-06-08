@@ -89,13 +89,6 @@ export class JobRepository {
     });
   }
 
-  listBySession(sessionId: string): Promise<InvestigationJob[]> {
-    return this.prisma.investigationJob.findMany({
-      where: { sessionId },
-      orderBy: { createdAt: 'asc' },
-    });
-  }
-
   readEvents(job: InvestigationJob): ProgressEvent[] {
     return (job.events as Prisma.JsonArray as unknown as ProgressEvent[]) ?? [];
   }

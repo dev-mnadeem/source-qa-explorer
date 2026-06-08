@@ -21,11 +21,4 @@ export class MessageRepository {
       include: { citations: true, auditVerdict: true },
     });
   }
-
-  findById(id: string): Promise<MessageWithRelations | null> {
-    return this.prisma.message.findUnique({
-      where: { id },
-      include: { citations: true, auditVerdict: true },
-    });
-  }
 }
