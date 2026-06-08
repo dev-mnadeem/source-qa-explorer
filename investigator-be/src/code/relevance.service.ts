@@ -2,10 +2,17 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Injectable, Logger } from '@nestjs/common';
 import { CodeService } from '@/code/code.service';
+import { REPO_CACHE_TTL_MS } from '@/shared/constants';
 
 /** Cap on files indexed per repository, to bound memory and index time. */
 const MAX_INDEXED_FILES = 1500;
 const MAX_FILE_BYTES = 400_000;
+/**
+ * Indexes kept in memory at once. Each holds every line of up to 1,500 files,
+ * so an uncapped cache grows by one repository per session for the life of
+ * the process.
+ */
+const MAX_CACHED_INDEXES = 16;
 
 /** Standard BM25 constants: term-frequency saturation and length normalisation. */
 const K1 = 1.5;
@@ -170,16 +177,19 @@ export class RelevanceService {
     return i;
   }
 
-  /** Drops a cached index, e.g. once a checkout has been evicted. */
-  invalidate(repoRoot: string): void {
-    this.indexes.delete(repoRoot);
-  }
-
   // -- indexing --------------------------------------------------------
 
   private async getIndex(repoRoot: string): Promise<RepoIndex> {
     const cached = this.indexes.get(repoRoot);
-    if (cached) return cached;
+    // Checkouts are evicted after the same TTL and re-extracted at the same
+    // path, so an older index may describe files that no longer exist.
+    if (cached && Date.now() - cached.builtAt < REPO_CACHE_TTL_MS) {
+      // Re-inserting moves the entry to the end of the Map's insertion
+      // order, which makes the first key the least recently used.
+      this.indexes.delete(repoRoot);
+      this.indexes.set(repoRoot, cached);
+      return cached;
+    }
 
     const started = Date.now();
     const found = await this.code.findFiles(repoRoot, '.', MAX_INDEXED_FILES);
@@ -207,7 +217,12 @@ export class RelevanceService {
       averageLength,
       builtAt: Date.now(),
     };
+    this.indexes.delete(repoRoot);
     this.indexes.set(repoRoot, index);
+    for (const oldest of this.indexes.keys()) {
+      if (this.indexes.size <= MAX_CACHED_INDEXES) break;
+      this.indexes.delete(oldest);
+    }
     this.logger.log(
       `Indexed ${files.length} files in ${Date.now() - started}ms for ${repoRoot}`,
     );

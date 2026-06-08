@@ -20,6 +20,8 @@ import {
 
 type AnthropicMessageParam = Anthropic.MessageParam;
 
+const MAX_SEARCH_RESULTS = 25;
+
 export type InvestigateInput = {
   repoRoot: string;
   repoLabel: string;
@@ -244,7 +246,12 @@ export class AgentService {
         }
         case 'search_code': {
           const query = args.query as string;
-          const limit = (args.limit as number | undefined) ?? 10;
+          // The model picks the limit; a huge one would dump the whole index
+          // into the next prompt.
+          const requested = Math.trunc(Number(args.limit ?? 10));
+          const limit = Number.isFinite(requested)
+            ? Math.min(Math.max(requested, 1), MAX_SEARCH_RESULTS)
+            : 10;
           const ranked = await this.relevance.rank(repoRoot, query, limit);
           const formatted = ranked
             .map(

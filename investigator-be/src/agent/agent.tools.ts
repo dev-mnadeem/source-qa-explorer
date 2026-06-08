@@ -105,7 +105,7 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
         },
         limit: {
           type: 'integer',
-          description: 'Maximum files to return. Defaults to 10.',
+          description: 'Maximum files to return, 1 to 25. Defaults to 10.',
         },
       },
       required: ['query'],
