@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BadRequestException } from '@nestjs/common';
-import { CodeService } from '@/code/code.service';
+import { CodeService, parseRipgrepOutput } from '@/code/code.service';
 
 describe('CodeService', () => {
   let service: CodeService;
@@ -84,5 +84,30 @@ describe('CodeService', () => {
       const indexMatch = result.matches.find((m) => m.path === 'src/index.ts');
       expect(indexMatch?.line).toBe(1);
     });
+  });
+});
+
+describe('parseRipgrepOutput', () => {
+  it('strips the ./ prefix rg adds when searching the current directory', () => {
+    expect(
+      parseRipgrepOutput('./src/auth.ts:12:  verify(token)\n', 50),
+    ).toEqual([{ path: 'src/auth.ts', line: 12, text: '  verify(token)' }]);
+  });
+
+  it('keeps colons that belong to the matched text', () => {
+    const [match] = parseRipgrepOutput(
+      'src/a.ts:3:const url = "http://x";',
+      50,
+    );
+    expect(match.text).toBe('const url = "http://x";');
+  });
+
+  it('skips malformed lines and stops at the limit', () => {
+    const out = ['garbage', 'a.ts:x:no line', 'a.ts:1:one', 'b.ts:2:two'].join(
+      '\n',
+    );
+    expect(parseRipgrepOutput(out, 1)).toEqual([
+      { path: 'a.ts', line: 1, text: 'one' },
+    ]);
   });
 });

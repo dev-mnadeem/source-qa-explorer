@@ -27,6 +27,34 @@ const IGNORED_DIRS = new Set([
   'target',
 ]);
 
+/**
+ * Parses `rg --line-number --no-heading` output (`path:line:text`).
+ *
+ * rg prefixes paths with `./` when searching `.`; that is stripped so grep
+ * results, citations and GitHub links use the same repo-relative form as the
+ * Node fallback.
+ */
+export function parseRipgrepOutput(stdout: string, limit: number): GrepMatch[] {
+  const matches: GrepMatch[] = [];
+  for (const rawLine of stdout.split('\n')) {
+    if (!rawLine || matches.length >= limit) break;
+    const firstColon = rawLine.indexOf(':');
+    const secondColon = rawLine.indexOf(':', firstColon + 1);
+    if (firstColon === -1 || secondColon === -1) continue;
+    const line = Number.parseInt(
+      rawLine.slice(firstColon + 1, secondColon),
+      10,
+    );
+    if (!Number.isFinite(line)) continue;
+    matches.push({
+      path: rawLine.slice(0, firstColon).replace(/^\.\//, ''),
+      line,
+      text: rawLine.slice(secondColon + 1),
+    });
+  }
+  return matches;
+}
+
 @Injectable()
 export class CodeService {
   private readonly logger = new Logger(CodeService.name);
@@ -228,6 +256,9 @@ export class CodeService {
         '--max-count=20',
         '--max-filesize=1M',
         '--no-follow',
+        // The tool contract is a literal search, which is what the Node
+        // fallback does; without this a pattern like `foo(` is a regex error.
+        '--fixed-strings',
       ];
       if (options.caseInsensitive) args.push('-i');
       if (options.glob) args.push('-g', options.glob);
@@ -245,20 +276,7 @@ export class CodeService {
         if (code !== 0 && code !== 1) {
           return rej(new Error(`ripgrep failed: ${stderr || `exit ${code}`}`));
         }
-        const matches: GrepMatch[] = [];
-        for (const rawLine of stdout.split('\n')) {
-          if (!rawLine || matches.length >= MAX_GREP_RESULTS) break;
-          // format: path:line:text
-          const firstColon = rawLine.indexOf(':');
-          const secondColon = rawLine.indexOf(':', firstColon + 1);
-          if (firstColon === -1 || secondColon === -1) continue;
-          const path = rawLine.slice(0, firstColon);
-          const lineStr = rawLine.slice(firstColon + 1, secondColon);
-          const text = rawLine.slice(secondColon + 1);
-          const line = Number.parseInt(lineStr, 10);
-          if (!Number.isFinite(line)) continue;
-          matches.push({ path, line, text });
-        }
+        const matches = parseRipgrepOutput(stdout, MAX_GREP_RESULTS);
         res({
           pattern,
           matches,

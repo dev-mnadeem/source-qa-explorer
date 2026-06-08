@@ -53,7 +53,8 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
       properties: {
         pattern: {
           type: 'string',
-          description: 'Literal text or regex-escaped pattern to search for.',
+          description:
+            'Literal text to search for. Regex syntax is not interpreted.',
         },
         glob: {
           type: 'string',
