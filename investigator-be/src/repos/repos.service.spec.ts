@@ -25,6 +25,35 @@ describe('ReposService.parseGithubUrl', () => {
     expect(parsed.name).toBe('repo');
   });
 
+  it('keeps dots in repository names', () => {
+    const parsed = service.parseGithubUrl('https://github.com/vercel/next.js');
+    expect(parsed.owner).toBe('vercel');
+    expect(parsed.name).toBe('next.js');
+    expect(parsed.webUrl).toBe('https://github.com/vercel/next.js');
+  });
+
+  it('strips .git from a dotted repository name', () => {
+    const parsed = service.parseGithubUrl(
+      'https://github.com/socketio/socket.io.git/',
+    );
+    expect(parsed.name).toBe('socket.io');
+  });
+
+  it('accepts the www. host', () => {
+    const parsed = service.parseGithubUrl('https://www.github.com/owner/repo');
+    expect(parsed.owner).toBe('owner');
+    expect(parsed.name).toBe('repo');
+  });
+
+  it('rejects dot-segment repository names', () => {
+    for (const url of [
+      'https://github.com/owner/..',
+      'https://github.com/owner/.',
+    ]) {
+      expect(() => service.parseGithubUrl(url)).toThrow(BadRequestException);
+    }
+  });
+
   it('rejects non-github urls', () => {
     expect(() => service.parseGithubUrl('https://gitlab.com/o/r')).toThrow(
       BadRequestException,

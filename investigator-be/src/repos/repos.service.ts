@@ -24,18 +24,21 @@ export class ReposService {
   private readonly logger = new Logger(ReposService.name);
 
   parseGithubUrl(input: string): ParsedGithubUrl {
-    const trimmed = input.trim();
-    // Accept https://github.com/owner/repo, https://github.com/owner/repo.git,
-    // and trailing slashes.
-    const match = trimmed.match(
-      /^https?:\/\/github\.com\/([^/\s]+)\/([^/\s.]+)(\.git)?\/?$/i,
-    );
-    if (!match) {
+    // Accept https://github.com/owner/repo with an optional www., .git suffix
+    // or trailing slash. Repository names may contain dots (vercel/next.js),
+    // so the .git suffix is stripped explicitly rather than excluded by the
+    // character class.
+    const match = input
+      .trim()
+      .match(
+        /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/i,
+      );
+    const [, owner, name] = match ?? [];
+    if (!owner || !name || name === '.' || name === '..') {
       throw new BadRequestException(
         'Expected a public GitHub URL like https://github.com/owner/repo',
       );
     }
-    const [, owner, name] = match;
     return {
       owner,
       name,
