@@ -16,6 +16,9 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+# The standalone server listens on $HOSTNAME, which Docker sets to the
+# container id; bind all interfaces so the loopback healthcheck can reach it.
+ENV HOSTNAME=0.0.0.0 PORT=3000
 
 RUN addgroup -S app && adduser -S app -G app
 
