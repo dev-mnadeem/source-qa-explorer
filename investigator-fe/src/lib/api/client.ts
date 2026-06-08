@@ -9,29 +9,31 @@ export function apiUrl(path: string): string {
   return path.startsWith("http") ? path : `${API_BASE_URL}${path}`;
 }
 
+/** Nest returns `message` as a string, or as a list for validation errors. */
+function errorMessage(text: string, fallback: string): string {
+  try {
+    const parsed = JSON.parse(text) as { message?: string | string[] };
+    if (Array.isArray(parsed.message)) return parsed.message.join("; ");
+    if (parsed.message) return parsed.message;
+  } catch {
+    // Not JSON (a proxy error page, for instance); use the text as is.
+  }
+  return text || fallback;
+}
+
 export async function apiClientFetch<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const url = path.startsWith("http") ? path : `${API_BASE_URL}${path}`;
   const headers = new Headers(init.headers);
-
   if (!headers.has("Content-Type") && init.body) {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(url, { ...init, headers });
+  const response = await fetch(apiUrl(path), { ...init, headers });
 
   if (!response.ok) {
-    const text = await response.text();
-    let message = text || response.statusText;
-    try {
-      const parsed = JSON.parse(text) as { message?: string };
-      if (parsed.message) message = parsed.message;
-    } catch {
-      // body wasn't JSON; keep the raw text
-    }
-    throw new Error(message);
+    throw new Error(errorMessage(await response.text(), response.statusText));
   }
 
   if (response.status === 204) return undefined as T;

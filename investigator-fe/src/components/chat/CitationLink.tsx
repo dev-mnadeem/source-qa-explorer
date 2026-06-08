@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { githubBlobUrl } from "@/lib/github";
 import { cn } from "@/lib/utils";
 import type { Citation } from "@/types/chat";
 
@@ -8,11 +9,6 @@ type Props = {
   citation: Citation;
   githubUrl: string;
 };
-
-function buildGithubLink(githubUrl: string, citation: Citation): string {
-  const base = githubUrl.replace(/\/$/, "");
-  return `${base}/blob/HEAD/${citation.filePath}#L${citation.lineStart}-L${citation.lineEnd}`;
-}
 
 export function CitationLink({ citation, githubUrl }: Props) {
   const [showExcerpt, setShowExcerpt] = useState(false);
@@ -22,7 +18,7 @@ export function CitationLink({ citation, githubUrl }: Props) {
     <div className="inline-block w-full">
       <div className="flex items-center gap-2 flex-wrap">
         <a
-          href={buildGithubLink(githubUrl, citation)}
+          href={githubBlobUrl(githubUrl, citation)}
           target="_blank"
           rel="noopener noreferrer"
           className={cn( "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs font-mono transition-colors",
