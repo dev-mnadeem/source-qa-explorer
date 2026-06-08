@@ -7,7 +7,7 @@ import { JobsService } from '@/jobs/jobs.service';
 @Module({
   imports: [ChatCoreModule],
   providers: [JobRepository, JobsService, InvestigationWorker],
-  exports: [JobRepository, JobsService, InvestigationWorker],
+  exports: [JobRepository, JobsService],
 })
 export class JobsModule implements OnApplicationBootstrap {
   constructor(private readonly worker: InvestigationWorker) {}

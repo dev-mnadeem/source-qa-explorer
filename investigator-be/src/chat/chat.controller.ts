@@ -19,8 +19,7 @@ import {
   ApiProduces,
   ApiTags,
 } from '@nestjs/swagger';
-import { Observable, concat, from, takeWhile } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { Observable, map } from 'rxjs';
 import { CreateSessionDto } from '@/sessions/dto/create-session.dto';
 import { MessageDto } from '@/sessions/dto/message.dto';
 import { PostMessageDto } from '@/sessions/dto/post-message.dto';
@@ -29,7 +28,6 @@ import { SessionsService } from '@/sessions/sessions.service';
 import { JobDto } from '@/jobs/dto/job.dto';
 import { JobRepository } from '@/jobs/job.repository';
 import { JobsService } from '@/jobs/jobs.service';
-import { InvestigationWorker } from '@/jobs/investigation.worker';
 import { ProgressEvent } from '@/jobs/job.types';
 
 @ApiTags('Chat')
@@ -39,7 +37,6 @@ export class ChatController {
     private readonly sessionsService: SessionsService,
     private readonly jobRepo: JobRepository,
     private readonly jobsService: JobsService,
-    private readonly worker: InvestigationWorker,
   ) {}
 
   @Post('sessions')
@@ -112,9 +109,10 @@ export class ChatController {
   /**
    * Server-sent events for one job.
    *
-   * Replays everything already recorded before attaching to the live feed, so a
-   * client that connects late — or reconnects after a dropped connection — sees
-   * the full history rather than joining mid-investigation.
+   * Starts with everything already recorded, so a client that connects late,
+   * or reconnects after a dropped connection, sees the whole trace. The stream
+   * closes after the terminal event so EventSource does not reconnect to a
+   * finished job.
    */
   @Sse('jobs/:jobId/events')
   @ApiOperation({ summary: 'Stream investigation progress as it happens' })
@@ -122,22 +120,7 @@ export class ChatController {
   async events(
     @Param('jobId', new ParseUUIDPipe()) jobId: string,
   ): Promise<Observable<{ data: ProgressEvent }>> {
-    const job = await this.jobsService.getOrThrow(jobId);
-    const replay = this.jobRepo.readEvents(job);
-
-    // A finished job needs no live feed; replay and close.
-    if (job.status === 'succeeded' || job.status === 'failed') {
-      return from([...replay]).pipe(map((data) => ({ data })));
-    }
-
-    return concat(from(replay), this.worker.stream(jobId)).pipe(
-      // Close the stream after the terminal event so the browser's EventSource
-      // does not immediately reconnect to a completed job.
-      takeWhile(
-        (event) => event.type !== 'done' && event.type !== 'error',
-        true,
-      ),
-      map((data) => ({ data })),
-    );
+    await this.jobsService.getOrThrow(jobId);
+    return this.jobsService.followEvents(jobId).pipe(map((data) => ({ data })));
   }
 }
