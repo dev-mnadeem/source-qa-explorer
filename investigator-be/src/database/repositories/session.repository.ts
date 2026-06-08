@@ -14,11 +14,8 @@ export class SessionRepository {
     return this.prisma.session.findUnique({ where: { id } });
   }
 
-  touch(id: string): Promise<Session> {
-    return this.prisma.session.update({
-      where: { id },
-      data: { updatedAt: new Date() },
-    });
+  async delete(id: string): Promise<void> {
+    await this.prisma.session.delete({ where: { id } });
   }
 
   updateRepoPath(id: string, repoPath: string): Promise<Session> {

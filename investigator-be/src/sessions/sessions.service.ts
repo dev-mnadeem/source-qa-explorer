@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { AuditVerdict, Citation, Message, Session } from '@prisma/client';
-import { AuditVerdictRepository } from '@/database/repositories/audit-verdict.repository';
 import { MessageRepository } from '@/database/repositories/message.repository';
 import { SessionRepository } from '@/database/repositories/session.repository';
 import { ReposService } from '@/repos/repos.service';
@@ -20,7 +19,6 @@ export class SessionsService {
   constructor(
     private readonly sessionRepo: SessionRepository,
     private readonly messageRepo: MessageRepository,
-    private readonly auditRepo: AuditVerdictRepository,
     private readonly reposService: ReposService,
   ) {}
 
@@ -33,7 +31,15 @@ export class SessionsService {
       repoName: parsed.name,
       repoPath: '',
     });
-    const repoPath = await this.reposService.clone(session.id, parsed);
+    let repoPath: string;
+    try {
+      repoPath = await this.reposService.clone(session.id, parsed);
+    } catch (err) {
+      // A session whose repository could not be fetched is unusable, and
+      // leaving the row behind means every later lookup retries the download.
+      await this.sessionRepo.delete(session.id);
+      throw err;
+    }
     const updated = await this.sessionRepo.updateRepoPath(session.id, repoPath);
     return this.toDto(updated);
   }
