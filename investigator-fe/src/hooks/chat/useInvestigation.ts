@@ -117,5 +117,7 @@ export function useInvestigation(sessionId: string) {
     [closeStream, queryClient, refreshMessages, sessionId],
   );
 
-  return { ask, events, isRunning, error };
+  const dismissError = useCallback(() => setError(null), []);
+
+  return { ask, events, isRunning, error, dismissError };
 }

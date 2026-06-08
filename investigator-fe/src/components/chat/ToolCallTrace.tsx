@@ -17,13 +17,14 @@ export function ToolCallTrace({ toolCalls }: Props) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="text-xs text-muted hover:text-foreground inline-flex items-center gap-1"
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
       >
-        <span>{open ? "▾" : "▸"}</span>
+        <span aria-hidden>{open ? "▾" : "▸"}</span>
         Tool calls ({toolCalls.length})
       </button>
       {open && (
-        <ol className="mt-2 space-y-1 text-[11px] font-mono text-foreground-2 border-l-2 border-border pl-3">
+        <ol className="mt-2 space-y-1 border-l-2 border-border pl-3 font-mono text-[11px] break-words text-foreground-2">
           {toolCalls.map((call, idx) => (
             <li key={idx}>
               <span className="text-muted mr-1">

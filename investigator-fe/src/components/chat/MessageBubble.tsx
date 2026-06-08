@@ -16,14 +16,16 @@ export function MessageBubble({ message, githubUrl }: Props) {
   const isUser = message.role === "user";
 
   return (
-    <div
+    <article
+      aria-label={isUser ? "Your question" : "Investigator answer"}
       className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}
     >
       <div
-        className={cn( "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
+        className={cn(
+          "min-w-0 rounded-xl px-4 py-3 text-sm leading-relaxed",
           isUser
-            ? "bg-foreground text-background "
-            : "bg-surface-2 text-foreground border border-border",
+            ? "max-w-[90%] bg-foreground text-background sm:max-w-[75%]"
+            : "w-full border border-border bg-surface-2 text-foreground",
         )}
       >
         {isUser ? (
@@ -40,9 +42,9 @@ export function MessageBubble({ message, githubUrl }: Props) {
 
         {!isUser && message.citations.length > 0 && (
           <div className="mt-3 space-y-1.5">
-            <div className="text-[11px] uppercase tracking-wider text-muted">
+            <h3 className="font-mono text-[11px] tracking-wider text-muted uppercase">
               Citations
-            </div>
+            </h3>
             <div className="space-y-1.5">
               {message.citations.map((citation) => (
                 <CitationLink
@@ -59,6 +61,6 @@ export function MessageBubble({ message, githubUrl }: Props) {
           <ToolCallTrace toolCalls={message.toolCalls} />
         )}
       </div>
-    </div>
+    </article>
   );
 }

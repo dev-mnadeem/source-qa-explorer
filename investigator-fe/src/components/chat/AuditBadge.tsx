@@ -29,18 +29,19 @@ export function AuditBadge({ verdict }: Props) {
       >
         {/* The status dot is drawn by .chip::before, so none is needed here. */}
         Audit: {style.label}
-        <span className="text-[10px] opacity-60">{open ? "▴" : "▾"}</span>
+        <span aria-hidden className="text-[10px] opacity-60">
+          {open ? "▴" : "▾"}
+        </span>
       </button>
       {open && (
-        <div className="mt-2 rounded-md border border-border bg-surface p-3 text-xs space-y-2 max-w-xl">
+        <div className="mt-2 max-w-xl space-y-2 rounded-md border border-border bg-surface p-3 text-xs">
           <div>
             <div className="font-semibold text-foreground-2">
               Programmatic check{" "}
               <span
-                className={cn( "ml-1 font-normal",
-                  verdict.programmaticPass
-                    ? "text-emerald-600 dark:text-emerald-400"
-                    : "text-red-600 dark:text-red-400",
+                className={cn(
+                  "ml-1 font-normal",
+                  verdict.programmaticPass ? "text-trusted" : "text-suspect",
                 )}
               >
                 {verdict.programmaticPass ? "passed" : "failed"}
