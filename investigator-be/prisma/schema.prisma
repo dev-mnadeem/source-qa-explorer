@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum MessageRole {
+  user
+  assistant
+}
+
+enum AuditStatus {
+  trusted
+  partial
+  suspect
+  pending
+}
+
+model Session {
+  id        String    @id @default(uuid()) @db.Uuid
+  githubUrl String    @map("github_url")
+  repoOwner String    @map("repo_owner")
+  repoName  String    @map("repo_name")
+  repoPath  String    @map("repo_path")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  messages  Message[]
+
+  @@map("sessions")
+}
+
+model Message {
+  id           String        @id @default(uuid()) @db.Uuid
+  sessionId    String        @map("session_id") @db.Uuid
+  role         MessageRole
+  content      String        @db.Text
+  toolCalls    Json?         @map("tool_calls")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  session      Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  citations    Citation[]
+  claims       Claim[]
+  auditVerdict AuditVerdict?
+
+  @@index([sessionId, createdAt])
+  @@map("messages")
+}
+
+model Citation {
+  id        String   @id @default(uuid()) @db.Uuid
+  messageId String   @map("message_id") @db.Uuid
+  filePath  String   @map("file_path")
+  lineStart Int      @map("line_start")
+  lineEnd   Int      @map("line_end")
+  excerpt   String?  @db.Text
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("citations")
+}
+
+model Claim {
+  id          String   @id @default(uuid()) @db.Uuid
+  messageId   String   @map("message_id") @db.Uuid
+  statement   String   @db.Text
+  citationIds String[] @map("citation_ids")
+  createdAt   DateTime @default(now()) @map("created_at")
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("claims")
+}
+
+model AuditVerdict {
+  id                String      @id @default(uuid()) @db.Uuid
+  messageId         String      @unique @map("message_id") @db.Uuid
+  status            AuditStatus
+  programmaticPass  Boolean     @map("programmatic_pass")
+  programmaticNotes String?     @map("programmatic_notes") @db.Text
+  llmStatus         AuditStatus @map("llm_status")
+  llmReasons        String      @map("llm_reasons") @db.Text
+  createdAt         DateTime    @default(now()) @map("created_at")
+  message           Message     @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("audit_verdicts")
+}
