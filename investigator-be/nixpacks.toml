@@ -1,0 +1,7 @@
+# Nixpacks build config for Railway.
+# Adds ripgrep to the runtime image for fast grep in CodeService.
+# (CodeService has a Node fallback so this is an optional speedup, not a hard
+# requirement. Repo cloning uses GitHub's tarball API and does not need git.)
+
+[phases.setup]
+nixPkgs = ["...", "ripgrep"]
