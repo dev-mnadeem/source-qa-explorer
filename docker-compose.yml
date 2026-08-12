@@ -1,0 +1,66 @@
+# One command to run the whole system:
+#
+#   docker compose up --build
+#
+# No credentials required. With no AWS keys present the API selects its offline
+# LLM provider, which drives the same agent loop against the real checkout and
+# cites real lines — so the demo is fully functional out of the box. Add keys
+# to .env to switch to the live model; nothing else changes.
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: investigator
+      POSTGRES_PASSWORD: investigator
+      POSTGRES_DB: investigator
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U investigator -d investigator"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./investigator-be
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://investigator:investigator@db:5432/investigator
+      DIRECT_URL: postgresql://investigator:investigator@db:5432/investigator
+      CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:3100}
+      # Unset by default -> offline provider. Override in .env for live calls.
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      # Paces the offline demo so the live progress stream is readable.
+      FAKE_LLM_DELAY_MS: ${FAKE_LLM_DELAY_MS:-600}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-}
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Migrations run against the container's own network view of the DB, so
+    # they belong here rather than in an image layer.
+    command: >
+      sh -c "npx prisma migrate deploy && node dist/main"
+
+  web:
+    build:
+      context: ./investigator-fe
+      args:
+        # Consumed by the browser, so it must be the host-visible address.
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:4000/api
+    ports:
+      # Host port 3100 by default: 3000 is a common local collision.
+      - "${WEB_PORT:-3100}:3000"
+    depends_on:
+      - api
+
+volumes:
+  db-data:
