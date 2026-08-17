@@ -13,6 +13,13 @@ enum MessageRole {
   assistant
 }
 
+enum JobStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
 enum AuditStatus {
   trusted
   partial
@@ -29,8 +36,38 @@ model Session {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   messages  Message[]
+  jobs      InvestigationJob[]
 
   @@map("sessions")
+}
+
+/// One queued investigation.
+///
+/// Investigations take multiple model round-trips and routinely outlive an
+/// HTTP request, so the request only enqueues; a worker claims and runs it.
+/// State lives in Postgres rather than process memory so that a restart does
+/// not lose in-flight work and so more than one API instance can share the
+/// queue via SELECT ... FOR UPDATE SKIP LOCKED.
+model InvestigationJob {
+  id            String    @id @default(uuid()) @db.Uuid
+  sessionId     String    @map("session_id") @db.Uuid
+  question      String    @db.Text
+  status        JobStatus @default(queued)
+  /// Append-only progress events, streamed to the client over SSE.
+  events        Json      @default("[]")
+  /// Set once the assistant message has been written.
+  resultMessageId String? @map("result_message_id") @db.Uuid
+  error         String?   @db.Text
+  attempts      Int       @default(0)
+  /// Guards against a worker that died mid-run holding the job forever.
+  claimedAt     DateTime? @map("claimed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  session       Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([sessionId])
+  @@map("investigation_jobs")
 }
 
 model Message {
