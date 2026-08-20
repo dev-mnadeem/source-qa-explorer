@@ -1,12 +1,14 @@
-import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk';
 import type Anthropic from '@anthropic-ai/sdk';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CodeService } from '@/code/code.service';
+import { RelevanceService } from '@/code/relevance.service';
+import type { LlmProvider } from '@/llm/llm.types';
+import { LLM_PROVIDER } from '@/llm/llm.types';
+import { CostRecord, LlmCostTracker } from '@/llm/llm.cost';
 import {
   DEFAULT_BEDROCK_MODEL_ID,
   MAX_TURNS_PER_INVESTIGATION,
-  Provides,
 } from '@/shared/constants';
 import { AGENT_TOOLS } from '@/agent/agent.tools';
 import { buildInvestigatorSystemPrompt } from '@/agent/agent.prompt';
@@ -23,16 +25,31 @@ export type InvestigateInput = {
   repoLabel: string;
   history: AnthropicMessageParam[];
   userMessage: string;
+  /**
+   * Called as the loop advances. Optional so the agent stays usable from tests
+   * and scripts that do not care about progress; when supplied it is what makes
+   * the UI able to show the investigation happening rather than a spinner.
+   */
+  onProgress?: (event: AgentProgress) => void;
 };
+
+export type AgentProgress =
+  | { kind: 'turn'; turn: number }
+  | { kind: 'tool'; name: string; summary: string }
+  | { kind: 'answering' }
+  /** Emitted by the orchestrator once the agent has submitted. */
+  | { kind: 'auditing' };
 
 @Injectable()
 export class AgentService {
   private readonly logger = new Logger(AgentService.name);
 
   constructor(
-    @Inject(Provides.Anthropic) private readonly anthropic: AnthropicBedrock,
+    @Inject(LLM_PROVIDER) private readonly llm: LlmProvider,
     private readonly codeService: CodeService,
+    private readonly relevance: RelevanceService,
     private readonly config: ConfigService,
+    private readonly cost: LlmCostTracker,
   ) {}
 
   async investigate(input: InvestigateInput): Promise<AgentResult> {
@@ -41,19 +58,23 @@ export class AgentService {
       { role: 'user', content: input.userMessage },
     ];
     const toolCalls: ToolCallRecord[] = [];
+    const costs: CostRecord[] = [];
     const model =
       this.config.get<string>('AWS_BEDROCK_INVESTIGATOR_MODEL_ID') ??
       this.config.get<string>('AWS_BEDROCK_MODEL_ID') ??
       DEFAULT_BEDROCK_MODEL_ID;
 
     for (let turn = 0; turn < MAX_TURNS_PER_INVESTIGATION; turn++) {
-      const response = await this.anthropic.messages.create({
+      input.onProgress?.({ kind: 'turn', turn: turn + 1 });
+
+      const response = await this.llm.complete({
         model,
-        max_tokens: 4096,
+        maxTokens: 4096,
         system: buildInvestigatorSystemPrompt(input.repoLabel),
         tools: AGENT_TOOLS,
         messages,
       });
+      costs.push(this.cost.record('investigator', model, response.usage));
 
       // Persist the assistant's full response (text + tool_use blocks) to the
       // history so the next turn sees its own prior reasoning.
@@ -65,7 +86,8 @@ export class AgentService {
           block.type === 'tool_use' && block.name === 'submit_answer',
       );
       if (submission) {
-        return this.parseSubmission(submission, toolCalls);
+        input.onProgress?.({ kind: 'answering' });
+        return this.parseSubmission(submission, toolCalls, costs);
       }
 
       // Otherwise, dispatch any tool calls and feed results back.
@@ -75,11 +97,12 @@ export class AgentService {
 
       if (toolUses.length === 0) {
         // Model produced text but didn't submit. Nudge it once.
-        if (response.stop_reason === 'end_turn') {
+        if (response.stopReason === 'end_turn') {
           return {
             answer: this.collectText(response.content),
             citations: [],
             toolCalls,
+            costs,
             stopReason: 'no_answer',
           };
         }
@@ -103,6 +126,7 @@ export class AgentService {
           input: toolUse.input as Record<string, unknown>,
           resultSummary: summary,
         });
+        input.onProgress?.({ kind: 'tool', name: toolUse.name, summary });
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
@@ -117,6 +141,7 @@ export class AgentService {
         'I ran out of investigation turns before reaching a confident answer. Please ask a more focused follow-up.',
       citations: [],
       toolCalls,
+      costs,
       stopReason: 'max_turns',
     };
   }
@@ -126,6 +151,7 @@ export class AgentService {
   private parseSubmission(
     submission: Anthropic.ToolUseBlock,
     toolCalls: ToolCallRecord[],
+    costs: CostRecord[],
   ): AgentResult {
     const input = submission.input as {
       answer?: string;
@@ -148,14 +174,12 @@ export class AgentService {
         lineStart: c.line_start,
         lineEnd: c.line_end,
       }));
-    return { answer, citations, toolCalls, stopReason: 'submitted' };
+    return { answer, citations, toolCalls, costs, stopReason: 'submitted' };
   }
 
   private collectText(content: Anthropic.ContentBlock[]): string {
     return content
-      .filter(
-        (block): block is Anthropic.TextBlock => block.type === 'text',
-      )
+      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
       .map((block) => block.text)
       .join('\n')
       .trim();
@@ -216,6 +240,24 @@ export class AgentService {
           return {
             content: `grep ${pattern}${glob ? ` (glob: ${glob})` : ''}: ${result.matches.length} matches\n${formatted || '(no matches)'}${trunc}`,
             summary: `grep(${pattern}) → ${result.matches.length} matches`,
+          };
+        }
+        case 'search_code': {
+          const query = args.query as string;
+          const limit = (args.limit as number | undefined) ?? 10;
+          const ranked = await this.relevance.rank(repoRoot, query, limit);
+          const formatted = ranked
+            .map(
+              (r) =>
+                `${r.path} (score ${r.score})` +
+                (r.bestLine
+                  ? `\n    ${r.bestLine.line}: ${r.bestLine.text}`
+                  : ''),
+            )
+            .join('\n');
+          return {
+            content: `search_code "${query}": ${ranked.length} ranked files\n${formatted || '(no matches)'}`,
+            summary: `search_code(${query}) → ${ranked.length} ranked files`,
           };
         }
         case 'find_files': {

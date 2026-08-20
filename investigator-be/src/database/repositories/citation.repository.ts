@@ -6,9 +6,7 @@ import { PrismaService } from '@/database/prisma.service';
 export class CitationRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  createMany(
-    rows: Prisma.CitationUncheckedCreateInput[],
-  ): Promise<Citation[]> {
+  createMany(rows: Prisma.CitationUncheckedCreateInput[]): Promise<Citation[]> {
     if (rows.length === 0) return Promise.resolve([]);
     return this.prisma.$transaction(
       rows.map((data) => this.prisma.citation.create({ data })),
