@@ -4,6 +4,7 @@ import { CitationInput } from '@/agent/dto/agent-result.dto';
 import { AuditChecker } from '@/audit/audit.checker';
 import { AuditLlm } from '@/audit/audit.llm';
 import { AuditResult } from '@/audit/dto/audit-result.dto';
+import { CostRecord, LlmCostTracker } from '@/llm/llm.cost';
 
 const STATUS_RANK: Record<AuditStatus, number> = {
   trusted: 3,
@@ -19,6 +20,7 @@ export class AuditService {
   constructor(
     private readonly checker: AuditChecker,
     private readonly llm: AuditLlm,
+    private readonly cost: LlmCostTracker,
   ) {}
 
   async run(input: {
@@ -26,6 +28,7 @@ export class AuditService {
     question: string;
     answer: string;
     citations: CitationInput[];
+    priorCosts?: CostRecord[];
   }): Promise<AuditResult> {
     const programmatic = await this.checker.check(
       input.repoRoot,
@@ -48,6 +51,11 @@ export class AuditService {
         ? programmaticImplied
         : llm.status;
 
-    return { status, programmatic, llm };
+    const cost = this.cost.summarise([
+      ...(input.priorCosts ?? []),
+      ...llm.costs,
+    ]);
+
+    return { status, programmatic, llm, cost };
   }
 }

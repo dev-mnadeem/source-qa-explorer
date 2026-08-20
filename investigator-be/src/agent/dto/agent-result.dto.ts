@@ -10,9 +10,12 @@ export type CitationInput = {
   lineEnd: number;
 };
 
+import type { CostRecord } from '@/llm/llm.cost';
+
 export type AgentResult = {
   answer: string;
   citations: CitationInput[];
   toolCalls: ToolCallRecord[];
+  costs: CostRecord[];
   stopReason: 'submitted' | 'max_turns' | 'no_answer';
 };

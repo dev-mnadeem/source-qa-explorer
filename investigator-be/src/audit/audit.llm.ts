@@ -1,9 +1,11 @@
-import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk';
 import type Anthropic from '@anthropic-ai/sdk';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { AuditStatus } from '@prisma/client';
-import { DEFAULT_BEDROCK_MODEL_ID, Provides } from '@/shared/constants';
+import type { LlmProvider } from '@/llm/llm.types';
+import { LLM_PROVIDER } from '@/llm/llm.types';
+import { CostRecord, LlmCostTracker } from '@/llm/llm.cost';
+import { DEFAULT_BEDROCK_MODEL_ID } from '@/shared/constants';
 import {
   AUDITOR_SYSTEM_PROMPT,
   buildAuditorUserPrompt,
@@ -20,8 +22,9 @@ export class AuditLlm {
   private readonly logger = new Logger(AuditLlm.name);
 
   constructor(
-    @Inject(Provides.Anthropic) private readonly anthropic: AnthropicBedrock,
+    @Inject(LLM_PROVIDER) private readonly llm: LlmProvider,
     private readonly config: ConfigService,
+    private readonly cost: LlmCostTracker,
   ) {}
 
   async audit(input: {
@@ -51,17 +54,17 @@ export class AuditLlm {
       DEFAULT_BEDROCK_MODEL_ID;
 
     let raw = '';
+    const costs: CostRecord[] = [];
     try {
-      const response = await this.anthropic.messages.create({
+      const response = await this.llm.complete({
         model,
-        max_tokens: 600,
+        maxTokens: 600,
         system: AUDITOR_SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userPrompt }],
       });
+      costs.push(this.cost.record('auditor', model, response.usage));
       raw = response.content
-        .filter(
-          (block): block is Anthropic.TextBlock => block.type === 'text',
-        )
+        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
         .map((block) => block.text)
         .join('')
         .trim();
@@ -71,13 +74,14 @@ export class AuditLlm {
       return {
         status: 'suspect',
         reasons: `Auditor call failed (${message}). Treating as suspect.`,
+        costs,
       };
     }
 
-    return this.parseVerdict(raw);
+    return { ...this.parseVerdict(raw), costs };
   }
 
-  private parseVerdict(raw: string): LlmAuditResult {
+  private parseVerdict(raw: string): Omit<LlmAuditResult, 'costs'> {
     // Strip any markdown fencing and find the first {...} block.
     const cleaned = raw.replace(/```json\s*|```/g, '').trim();
     const jsonMatch = cleaned.match(/\{[\s\S]*\}/);

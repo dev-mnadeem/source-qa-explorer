@@ -1,17 +1,14 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import { AgentService } from '@/agent/agent.service';
-import {
-  CitationInput,
-  ToolCallRecord,
-} from '@/agent/dto/agent-result.dto';
+import { AgentProgress, AgentService } from '@/agent/agent.service';
+import { CitationInput, ToolCallRecord } from '@/agent/dto/agent-result.dto';
 import { AuditService } from '@/audit/audit.service';
-import { CitationRepository } from '@/database/repositories/citation.repository';
+import { PrismaService } from '@/database/prisma.service';
 import { MessageRepository } from '@/database/repositories/message.repository';
-import { AuditVerdictRepository } from '@/database/repositories/audit-verdict.repository';
 import { MessageDto } from '@/sessions/dto/message.dto';
 import { SessionsService } from '@/sessions/sessions.service';
+import { MAX_HISTORY_MESSAGES } from '@/shared/constants';
 
 @Injectable()
 export class ChatService {
@@ -22,75 +19,113 @@ export class ChatService {
     private readonly agentService: AgentService,
     private readonly auditService: AuditService,
     private readonly messageRepo: MessageRepository,
-    private readonly citationRepo: CitationRepository,
-    private readonly auditVerdictRepo: AuditVerdictRepository,
+    private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * Runs one full investigation: agent loop, audit, persist.
+   *
+   * Called by the background worker rather than from the request thread — a
+   * multi-turn conversation with a live model routinely outlives an HTTP
+   * request, and previously this ran inline and timed out behind any proxy.
+   */
   async sendMessage(
     sessionId: string,
     content: string,
+    onProgress?: (event: AgentProgress) => void,
   ): Promise<MessageDto> {
     const session = await this.sessionsService.getOrThrow(sessionId);
     const repoLabel = `${session.repoOwner}/${session.repoName}`;
+    const startedAt = Date.now();
 
-    // 1. Persist the user message first.
+    // 1. Persist the user message first, so a crash mid-investigation still
+    //    leaves a record of what was asked.
     const userMessage = await this.messageRepo.create({
       sessionId,
       role: 'user',
       content,
     });
 
-    // 2. Build conversation history from prior turns (excluding this one).
+    // 2. Replay a bounded window of prior turns.
     const priorMessages = await this.messageRepo.listBySession(sessionId);
     const history = this.buildAgentHistory(
       priorMessages.filter((m) => m.id !== userMessage.id),
     );
 
-    // 3. Run the investigator.
+    // 3. Investigate, then 4. audit the result independently.
     const agentResult = await this.agentService.investigate({
       repoRoot: session.repoPath,
       repoLabel,
       history,
       userMessage: content,
+      onProgress,
     });
 
-    // 4. Run the independent audit.
+    onProgress?.({ kind: 'auditing' });
     const audit = await this.auditService.run({
       repoRoot: session.repoPath,
       question: content,
       answer: agentResult.answer,
       citations: agentResult.citations,
+      priorCosts: agentResult.costs,
     });
 
-    // 5. Persist the assistant message + citations + verdict.
-    const assistantMessage = await this.messageRepo.create({
-      sessionId,
-      role: 'assistant',
-      content: agentResult.answer,
-      toolCalls: this.toJsonValue(agentResult.toolCalls),
+    // 5. Persist the answer, its citations and its verdict as one unit.
+    //
+    //    These were three independent writes. A failure between them left an
+    //    assistant message with no citations and no verdict — which the UI
+    //    renders as an unaudited answer, the exact failure mode this project
+    //    exists to prevent. One transaction: all three, or none.
+    const assistantMessage = await this.prisma.$transaction(async (tx) => {
+      const message = await tx.message.create({
+        data: {
+          sessionId,
+          role: 'assistant',
+          content: agentResult.answer,
+          toolCalls: this.toJsonValue(agentResult.toolCalls),
+        },
+      });
+
+      if (agentResult.citations.length > 0) {
+        await tx.citation.createMany({
+          data: this.buildCitationRows(
+            message.id,
+            agentResult.citations,
+            audit.programmatic.perCitation,
+          ),
+        });
+      }
+
+      await tx.auditVerdict.create({
+        data: {
+          messageId: message.id,
+          status: audit.status,
+          programmaticPass: audit.programmatic.pass,
+          programmaticNotes: audit.programmatic.notes,
+          llmStatus: audit.llm.status,
+          llmReasons: audit.llm.reasons,
+        },
+      });
+
+      return tx.message.findUniqueOrThrow({
+        where: { id: message.id },
+        include: { citations: true, auditVerdict: true },
+      });
     });
 
-    const citationRows = await this.citationRepo.createMany(
-      this.buildCitationRows(
-        assistantMessage.id,
-        agentResult.citations,
-        audit.programmatic.perCitation,
-      ),
+    this.logger.log(
+      `session=${sessionId} verdict=${audit.status} ` +
+        `citations=${agentResult.citations.length} ` +
+        `tools=${agentResult.toolCalls.length} ` +
+        `tokens=${audit.cost.inputTokens}in/${audit.cost.outputTokens}out ` +
+        `usd=${audit.cost.usd} ms=${Date.now() - startedAt}`,
     );
-
-    const verdict = await this.auditVerdictRepo.create({
-      messageId: assistantMessage.id,
-      status: audit.status,
-      programmaticPass: audit.programmatic.pass,
-      programmaticNotes: audit.programmatic.notes,
-      llmStatus: audit.llm.status,
-      llmReasons: audit.llm.reasons,
-    });
 
     return this.sessionsService.messageToDto(
       assistantMessage,
-      citationRows,
-      verdict,
+      assistantMessage.citations,
+      assistantMessage.auditVerdict,
+      audit.cost,
     );
   }
 
@@ -98,17 +133,29 @@ export class ChatService {
 
   /**
    * Convert persisted messages into Anthropic message params for the agent.
-   * For multi-turn coherence we include each prior user question and the final
-   * assistant answer text. We do NOT replay tool_use/tool_result blocks — those
-   * were ephemeral to a previous turn and would bloat context unnecessarily.
-   * Citations are injected inline so the model can stay consistent with its
-   * own prior factual claims.
+   *
+   * Only the most recent MAX_HISTORY_MESSAGES turns are replayed. Previously
+   * every turn was replayed forever, so prompt size — and with it latency,
+   * cost and the risk of blowing the context window — grew without bound over
+   * a long session. Truncation is oldest-first so the immediate context, which
+   * is what follow-up questions depend on, always survives.
+   *
+   * Tool_use / tool_result blocks are still omitted: they were ephemeral to a
+   * previous turn. Citations are inlined so the model stays consistent with
+   * its own prior factual claims.
    */
   private buildAgentHistory(
     messages: Awaited<ReturnType<MessageRepository['listBySession']>>,
   ): Anthropic.MessageParam[] {
+    const recent = messages.slice(-MAX_HISTORY_MESSAGES);
+    if (messages.length > recent.length) {
+      this.logger.debug(
+        `Truncated history from ${messages.length} to ${recent.length} messages`,
+      );
+    }
+
     const history: Anthropic.MessageParam[] = [];
-    for (const m of messages) {
+    for (const m of recent) {
       if (m.role === 'user') {
         history.push({ role: 'user', content: m.content });
       } else if (m.role === 'assistant') {
@@ -118,14 +165,15 @@ export class ChatService {
               `${c.filePath}:${c.lineStart}-${c.lineEnd}${c.verified ? '' : ' (UNVERIFIED)'}`,
           )
           .join(', ');
-        const suffix = cited
-          ? `\n\n[Prior citations: ${cited}]`
-          : '';
-        history.push({
-          role: 'assistant',
-          content: `${m.content}${suffix}`,
-        });
+        const suffix = cited ? `\n\n[Prior citations: ${cited}]` : '';
+        history.push({ role: 'assistant', content: `${m.content}${suffix}` });
       }
+    }
+
+    // The Messages API rejects a transcript that opens on an assistant turn,
+    // which slicing can easily produce.
+    while (history.length > 0 && history[0].role === 'assistant') {
+      history.shift();
     }
     return history;
   }

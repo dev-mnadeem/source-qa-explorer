@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { Dirent } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join, normalize, relative, resolve, sep } from 'node:path';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { MAX_FILE_READ_BYTES, MAX_GREP_RESULTS } from '@/shared/constants';
@@ -33,12 +33,21 @@ export class CodeService {
   private rgAvailable: boolean | undefined;
 
   /**
-   * Resolve a path *relative to repoRoot* and ensure it doesn't escape.
-   * Throws BadRequestException if it does.
+   * Resolve a path *relative to repoRoot* and ensure it cannot escape.
+   *
+   * Two layers, because the repositories under inspection are untrusted
+   * archives downloaded from GitHub:
+   *
+   *   1. lexical  — reject `..` segments before touching the filesystem;
+   *   2. physical — resolve symlinks with realpath() and re-check containment.
+   *
+   * The second layer is the one that matters. A repository is free to contain
+   * `docs/secrets -> /etc/passwd`; a purely textual check accepts that path
+   * happily and would hand the file's contents to the model.
    */
-  private safeJoin(repoRoot: string, relPath: string): string {
+  private safeJoinLexical(repoRoot: string, relPath: string): string {
     const cleaned = normalize(relPath ?? '.').replace(/^[\\/]+/, '');
-    if (cleaned.startsWith('..') || cleaned.includes(`..${sep}`)) {
+    if (cleaned === '..' || cleaned.startsWith(`..${sep}`)) {
       throw new BadRequestException(`Path "${relPath}" escapes the repo root`);
     }
     const absolute = resolve(repoRoot, cleaned);
@@ -49,13 +58,46 @@ export class CodeService {
     return absolute;
   }
 
+  /**
+   * Lexical check, then symlink-aware containment check. Returns the real path.
+   */
+  private async safeJoin(repoRoot: string, relPath: string): Promise<string> {
+    const absolute = this.safeJoinLexical(repoRoot, relPath);
+
+    let realTarget: string;
+    let realRoot: string;
+    try {
+      realRoot = await realpath(resolve(repoRoot));
+    } catch {
+      // Repo root itself is gone; let the caller's stat() produce the error.
+      return absolute;
+    }
+    try {
+      realTarget = await realpath(absolute);
+    } catch {
+      // Path does not exist yet — the lexical check already cleared it, and
+      // the caller's stat() will report "not found".
+      return absolute;
+    }
+
+    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + sep)) {
+      this.logger.warn(
+        `Blocked symlink escape: "${relPath}" resolves outside the repo root`,
+      );
+      throw new BadRequestException(
+        `Path "${relPath}" resolves outside the repo root (symlink escape)`,
+      );
+    }
+    return realTarget;
+  }
+
   async readFile(
     repoRoot: string,
     path: string,
     lineStart?: number,
     lineEnd?: number,
   ): Promise<ReadFileResult> {
-    const absolute = this.safeJoin(repoRoot, path);
+    const absolute = await this.safeJoin(repoRoot, path);
     const stats = await stat(absolute).catch(() => null);
     if (!stats || !stats.isFile()) {
       throw new BadRequestException(`File not found: ${path}`);
@@ -83,14 +125,14 @@ export class CodeService {
   }
 
   async listDir(repoRoot: string, path = '.'): Promise<ListDirResult> {
-    const absolute = this.safeJoin(repoRoot, path);
+    const absolute = await this.safeJoin(repoRoot, path);
     const stats = await stat(absolute).catch(() => null);
     if (!stats || !stats.isDirectory()) {
       throw new BadRequestException(`Directory not found: ${path}`);
     }
     const dirents = await readdir(absolute, { withFileTypes: true });
     const entries: DirEntry[] = dirents
-      .filter((d) => !IGNORED_DIRS.has(d.name))
+      .filter((d) => !IGNORED_DIRS.has(d.name) && !d.isSymbolicLink())
       .map<DirEntry>((d) => ({
         name: d.name,
         type: d.isDirectory() ? 'dir' : 'file',
@@ -146,6 +188,9 @@ export class CodeService {
     }
     for (const dirent of dirents) {
       if (IGNORED_DIRS.has(dirent.name)) continue;
+      // Never follow symlinks when walking: they are the escape hatch out of
+      // the repo root, and no legitimate source file needs them.
+      if (dirent.isSymbolicLink()) continue;
       const full = join(dir, dirent.name);
       const rel = relative(repoRoot, full);
       if (dirent.isDirectory()) {
@@ -182,6 +227,7 @@ export class CodeService {
         '--color=never',
         '--max-count=20',
         '--max-filesize=1M',
+        '--no-follow',
       ];
       if (options.caseInsensitive) args.push('-i');
       if (options.glob) args.push('-g', options.glob);
@@ -191,8 +237,8 @@ export class CodeService {
       const child = spawn('rg', args, { cwd: repoRoot });
       let stdout = '';
       let stderr = '';
-      child.stdout.on('data', (d) => (stdout += d.toString()));
-      child.stderr.on('data', (d) => (stderr += d.toString()));
+      child.stdout.on('data', (d: Buffer) => (stdout += d.toString('utf8')));
+      child.stderr.on('data', (d: Buffer) => (stderr += d.toString('utf8')));
       child.on('error', rej);
       child.on('close', (code) => {
         // rg exits 1 when no matches — that's fine.

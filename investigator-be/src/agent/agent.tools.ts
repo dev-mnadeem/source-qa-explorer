@@ -62,7 +62,8 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
         },
         case_insensitive: {
           type: 'boolean',
-          description: 'Whether to match case-insensitively. Defaults to false.',
+          description:
+            'Whether to match case-insensitively. Defaults to false.',
         },
       },
       required: ['pattern'],
@@ -81,6 +82,32 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ['pattern'],
+    },
+  },
+  {
+    name: 'search_code',
+    description:
+      'Relevance-ranked search across the repo. Unlike `grep` (exact string) ' +
+      'and `find_files` (path substring), this understands that a question ' +
+      'about "authentication" should surface `auth.ts`. Ranks whole files by ' +
+      'BM25 over identifier-aware tokens and returns the best-matching line in ' +
+      'each. START HERE for any conceptual question; fall back to grep when you ' +
+      'need an exact literal.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description:
+            'Natural-language description of what you are looking for, e.g. ' +
+            '"how sessions are signed and expired".',
+        },
+        limit: {
+          type: 'integer',
+          description: 'Maximum files to return. Defaults to 10.',
+        },
+      },
+      required: ['query'],
     },
   },
   {

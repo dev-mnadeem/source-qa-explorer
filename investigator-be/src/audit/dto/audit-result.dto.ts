@@ -1,5 +1,6 @@
 import type { AuditStatus } from '@prisma/client';
 import { CitationInput } from '@/agent/dto/agent-result.dto';
+import type { CostRecord, CostSummary } from '@/llm/llm.cost';
 
 export type ProgrammaticCheckResult = {
   pass: boolean;
@@ -19,10 +20,12 @@ export type ProgrammaticCheckResult = {
 export type LlmAuditResult = {
   status: AuditStatus;
   reasons: string;
+  costs: CostRecord[];
 };
 
 export type AuditResult = {
   status: AuditStatus;
   programmatic: ProgrammaticCheckResult;
   llm: LlmAuditResult;
+  cost: CostSummary;
 };
