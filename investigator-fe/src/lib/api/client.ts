@@ -1,6 +1,14 @@
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000/api";
 
+/**
+ * Absolute URL for a path. EventSource cannot go through apiClientFetch, so it
+ * needs the same base resolution exposed separately.
+ */
+export function apiUrl(path: string): string {
+  return path.startsWith("http") ? path : `${API_BASE_URL}${path}`;
+}
+
 export async function apiClientFetch<T>(
   path: string,
   init: RequestInit = {},

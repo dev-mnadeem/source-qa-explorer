@@ -9,6 +9,7 @@ import { CreateSessionDto } from '@/sessions/dto/create-session.dto';
 import {
   AuditVerdictDto,
   CitationDto,
+  MessageCostDto,
   MessageDto,
   ToolCallRecord,
 } from '@/sessions/dto/message.dto';
@@ -76,6 +77,7 @@ export class SessionsService {
     message: Message,
     citations: Citation[],
     auditVerdict: AuditVerdict | null,
+    cost: MessageCostDto | null = null,
   ): MessageDto {
     return {
       id: message.id,
@@ -84,6 +86,7 @@ export class SessionsService {
       citations: citations.map((c) => this.citationToDto(c)),
       auditVerdict: auditVerdict ? this.auditVerdictToDto(auditVerdict) : null,
       toolCalls: (message.toolCalls as ToolCallRecord[] | null) ?? null,
+      cost,
       createdAt: message.createdAt.toISOString(),
     };
   }

@@ -23,6 +23,13 @@ export type ToolCallRecord = {
   resultSummary: string;
 };
 
+export type MessageCost = {
+  inputTokens: number;
+  outputTokens: number;
+  usd: number;
+  calls: number;
+};
+
 export type Message = {
   id: string;
   role: "user" | "assistant";
@@ -30,6 +37,7 @@ export type Message = {
   citations: Citation[];
   auditVerdict: AuditVerdict | null;
   toolCalls: ToolCallRecord[] | null;
+  cost: MessageCost | null;
   createdAt: string;
 };
 
