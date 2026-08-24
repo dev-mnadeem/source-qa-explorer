@@ -37,6 +37,20 @@ export class AuditVerdictDto {
   llmReasons!: string;
 }
 
+export class MessageCostDto {
+  @ApiProperty({ description: 'Prompt tokens consumed answering this message' })
+  inputTokens!: number;
+
+  @ApiProperty({ description: 'Completion tokens produced for this message' })
+  outputTokens!: number;
+
+  @ApiProperty({ description: 'Estimated USD cost of this message' })
+  usd!: number;
+
+  @ApiProperty({ description: 'Number of model calls made (agent + auditor)' })
+  calls!: number;
+}
+
 export type ToolCallRecord = {
   name: string;
   input: Record<string, unknown>;
@@ -66,6 +80,16 @@ export class MessageDto {
     nullable: true,
   })
   toolCalls!: ToolCallRecord[] | null;
+
+  @ApiProperty({
+    type: () => MessageCostDto,
+    required: false,
+    nullable: true,
+    description:
+      'Token usage and estimated spend for this answer. Null for user messages ' +
+      'and for messages loaded from history, where usage was not recorded.',
+  })
+  cost!: MessageCostDto | null;
 
   @ApiProperty()
   createdAt!: string;

@@ -33,9 +33,13 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('api/docs', app, document);
 
+  // Let in-flight investigations finish and close the DB pool on SIGTERM
+  // instead of dropping connections when the orchestrator recycles the pod.
+  app.enableShutdownHooks();
+
   const port = config.get<number>('PORT') ?? 4000;
-  await app.listen(port);
-  // eslint-disable-next-line no-console
+  await app.listen(port, '0.0.0.0');
+
   console.log(
     `Codebase Investigator API listening on http://localhost:${port}/api`,
   );
