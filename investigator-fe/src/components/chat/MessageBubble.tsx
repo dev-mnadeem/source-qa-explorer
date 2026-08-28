@@ -20,11 +20,10 @@ export function MessageBubble({ message, githubUrl }: Props) {
       className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}
     >
       <div
-        className={cn(
-          "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
+        className={cn( "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
           isUser
-            ? "bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900"
-            : "bg-zinc-100 text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-800",
+            ? "bg-foreground text-background "
+            : "bg-surface-2 text-foreground border border-border",
         )}
       >
         {isUser ? (
@@ -41,7 +40,7 @@ export function MessageBubble({ message, githubUrl }: Props) {
 
         {!isUser && message.citations.length > 0 && (
           <div className="mt-3 space-y-1.5">
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+            <div className="text-[11px] uppercase tracking-wider text-muted">
               Citations
             </div>
             <div className="space-y-1.5">

@@ -8,9 +8,16 @@ type Props = {
   messages: Message[];
   githubUrl: string;
   isPending: boolean;
+  /** Live investigation trace, shown while a question is being answered. */
+  trace?: React.ReactNode;
 };
 
-export function MessageList({ messages, githubUrl, isPending }: Props) {
+export function MessageList({
+  messages,
+  githubUrl,
+  isPending,
+  trace,
+}: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -19,7 +26,7 @@ export function MessageList({ messages, githubUrl, isPending }: Props) {
 
   if (messages.length === 0 && !isPending) {
     return (
-      <div className="flex-1 flex items-center justify-center text-zinc-500 dark:text-zinc-400 text-sm">
+      <div className="flex-1 flex items-center justify-center text-muted text-sm">
         Ask a question to begin investigating this repo.
       </div>
     );
@@ -34,24 +41,14 @@ export function MessageList({ messages, githubUrl, isPending }: Props) {
           githubUrl={githubUrl}
         />
       ))}
-      {isPending && (
-        <div className="flex justify-start">
-          <div className="rounded-2xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-4 py-3 text-sm text-zinc-500 dark:text-zinc-400">
-            <div className="flex items-center gap-2">
-              <div className="size-1.5 bg-zinc-400 rounded-full animate-pulse" />
-              <div
-                className="size-1.5 bg-zinc-400 rounded-full animate-pulse"
-                style={{ animationDelay: "150ms" }}
-              />
-              <div
-                className="size-1.5 bg-zinc-400 rounded-full animate-pulse"
-                style={{ animationDelay: "300ms" }}
-              />
-              <span className="ml-2">investigating…</span>
+      {isPending &&
+        (trace ?? (
+          <div className="flex justify-start">
+            <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-muted">
+              investigating…
             </div>
           </div>
-        </div>
-      )}
+        ))}
       <div ref={bottomRef} />
     </div>
   );

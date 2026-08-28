@@ -26,24 +26,28 @@ export function PasteUrlForm() {
 
   return (
     <form onSubmit={handleSubmit} className="w-full space-y-3">
-      <input
-        type="url"
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        placeholder="https://github.com/owner/repo"
-        required
-        disabled={createSession.isPending}
-        className="w-full rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400 dark:focus:ring-zinc-600 disabled:opacity-50"
-      />
-      <button
-        type="submit"
-        disabled={createSession.isPending || !url.trim()}
-        className="w-full rounded-md bg-zinc-900 text-zinc-50 px-4 py-3 text-sm font-medium hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-      >
-        {createSession.isPending ? "Cloning repo…" : "Start investigating"}
-      </button>
-      <p className="text-xs text-zinc-500 dark:text-zinc-400 text-center">
-        Public GitHub repos only. Cloning is shallow and ephemeral.
+      <div className="flex flex-col gap-2 rounded-lg border border-border-strong bg-surface p-2 shadow-sm sm:flex-row sm:items-center">
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://github.com/owner/repo"
+          aria-label="Public GitHub repository URL"
+          required
+          disabled={createSession.isPending}
+          className="min-w-0 flex-1 bg-transparent px-4 py-2.5 font-mono text-sm text-foreground placeholder:text-muted focus:outline-none disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          disabled={createSession.isPending || !url.trim()}
+          className="shrink-0 rounded-md bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {createSession.isPending ? "Cloning repo…" : "Investigate"}
+        </button>
+      </div>
+      <p className="text-center text-xs text-muted">
+        Public repositories only. The checkout is temporary and evicted
+        automatically.
       </p>
     </form>
   );

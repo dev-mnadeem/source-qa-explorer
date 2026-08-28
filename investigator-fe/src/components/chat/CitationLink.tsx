@@ -25,10 +25,9 @@ export function CitationLink({ citation, githubUrl }: Props) {
           href={buildGithubLink(githubUrl, citation)}
           target="_blank"
           rel="noopener noreferrer"
-          className={cn(
-            "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs font-mono transition-colors",
+          className={cn( "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs font-mono transition-colors",
             citation.verified
-              ? "border-zinc-200 hover:border-zinc-400 text-zinc-700 dark:border-zinc-700 dark:hover:border-zinc-500 dark:text-zinc-300"
+              ? "border-border text-foreground-2 hover:border-border-strong"
               : "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400",
           )}
           title={citation.verified ? "Open on GitHub" : "Unverified citation"}
@@ -42,14 +41,14 @@ export function CitationLink({ citation, githubUrl }: Props) {
           <button
             type="button"
             onClick={() => setShowExcerpt((v) => !v)}
-            className="text-[11px] text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            className="text-[11px] text-muted hover:text-foreground"
           >
             {showExcerpt ? "hide" : "preview"}
           </button>
         )}
       </div>
       {showExcerpt && citation.excerpt && (
-        <pre className="mt-1.5 rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 p-2 text-[11px] font-mono overflow-x-auto whitespace-pre">
+        <pre className="mt-1.5 rounded-md border border-border bg-surface-2 p-2 text-[11px] font-mono overflow-x-auto whitespace-pre">
           {citation.excerpt}
         </pre>
       )}
