@@ -55,22 +55,22 @@ export function Markdown({ children }: Props) {
             );
           }
           return (
-            <code className="rounded bg-zinc-200/70 dark:bg-zinc-800/70 px-1 py-0.5 font-mono text-[0.85em]">
+            <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.85em]">
               {c}
             </code>
           );
         },
         pre: ({ children: c }) => (
-          <pre className="my-2 rounded-md bg-zinc-200/70 dark:bg-zinc-800/70 p-3 overflow-x-auto text-[12px] font-mono leading-relaxed">
+          <pre className="my-2 rounded-md bg-surface-2 p-3 overflow-x-auto text-[12px] font-mono leading-relaxed">
             {c}
           </pre>
         ),
         blockquote: ({ children: c }) => (
-          <blockquote className="my-2 border-l-2 border-zinc-300 dark:border-zinc-700 pl-3 italic text-zinc-600 dark:text-zinc-400">
+          <blockquote className="my-2 border-l-2 border-border-strong pl-3 italic text-foreground-2">
             {c}
           </blockquote>
         ),
-        hr: () => <hr className="my-3 border-zinc-200 dark:border-zinc-800" />,
+        hr: () => <hr className="my-3 border-border" />,
       }}
     >
       {children}

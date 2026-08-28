@@ -1,26 +1,146 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ---------------------------------------------------------------------------
+   Design tokens.
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+   The subject is source code under inspection, so the palette is borrowed from
+   an editor: a cool slate ground, a single amber accent for the investigator's
+   own voice, and three semantic colours reserved exclusively for audit verdicts
+   (trusted / partial / suspect). Keeping the verdict colours out of the rest of
+   the interface is what lets a reader judge an answer's standing at a glance.
+--------------------------------------------------------------------------- */
+:root {
+  --background: #f6f8fa;
+  --surface: #ffffff;
+  --surface-2: #eef2f6;
+  --foreground: #0f1720;
+  --foreground-2: #46535f;
+  --muted: #6b7a88;
+  --border: #dde4ea;
+  --border-strong: #c5d0d9;
+
+  --accent: #b45309;
+  --accent-soft: #fdf3e7;
+
+  --trusted: #17694a;
+  --trusted-soft: #e4f1eb;
+  --partial: #8a5a06;
+  --partial-soft: #fbf0da;
+  --suspect: #a03530;
+  --suspect-soft: #f9e6e4;
+
+  --code-bg: #0f1720;
+  --code-fg: #dbe4ec;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0c1116;
+    --surface: #131b22;
+    --surface-2: #1b252e;
+    --foreground: #e6edf3;
+    --foreground-2: #b7c4d0;
+    --muted: #8494a2;
+    --border: #24313b;
+    --border-strong: #33434f;
+
+    --accent: #e8a33d;
+    --accent-soft: #2a2015;
+
+    --trusted: #6fd3a5;
+    --trusted-soft: #12271f;
+    --partial: #e0b463;
+    --partial-soft: #29220f;
+    --suspect: #e79a94;
+    --suspect-soft: #2a1917;
+
+    --code-bg: #0a0f14;
+    --code-fg: #cbd7e2;
   }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-foreground: var(--foreground);
+  --color-foreground-2: var(--foreground-2);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-trusted: var(--trusted);
+  --color-trusted-soft: var(--trusted-soft);
+  --color-partial: var(--partial);
+  --color-partial-soft: var(--partial-soft);
+  --color-suspect: var(--suspect);
+  --color-suspect-soft: var(--suspect-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A faint grid, as on graph paper — enough to stop large empty areas reading
+   as unfinished, quiet enough never to compete with the content. */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 75% 55% at 50% 38%, #000 35%, transparent 100%);
+  mask-image: radial-gradient(ellipse 75% 55% at 50% 38%, #000 35%, transparent 100%);
+}
+
+/* Verdict chips. Colour alone never carries the meaning — each chip also has a
+   dot and a text label, so the state survives greyscale and colour blindness. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 3px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  white-space: nowrap;
+}
+.chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.chip-trusted { color: var(--trusted); background: var(--trusted-soft); }
+.chip-partial { color: var(--partial); background: var(--partial-soft); }
+.chip-suspect { color: var(--suspect); background: var(--suspect-soft); }
+.chip-pending { color: var(--muted); background: var(--surface-2); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fade-up {
+    animation: fade-up 0.35s cubic-bezier(0.22, 0.8, 0.3, 1) both;
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
 }
