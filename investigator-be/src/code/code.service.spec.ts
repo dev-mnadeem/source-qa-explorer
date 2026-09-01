@@ -49,9 +49,9 @@ describe('CodeService', () => {
     });
 
     it('rejects path traversal', async () => {
-      await expect(
-        service.readFile(repoRoot, '../escape.txt'),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.readFile(repoRoot, '../escape.txt')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('throws on missing file', async () => {
