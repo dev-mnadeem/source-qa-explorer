@@ -1,17 +1,282 @@
 # Codebase Investigator
 
-> **Live demo:** <https://codebase-investigator-eight.vercel.app>
-> **API + Swagger:** <https://codebase-investigator-production.up.railway.app/api/docs>
+Paste a public GitHub URL, ask questions about the code in plain English, and get
+answers grounded in specific files and line ranges — where **every non-trivial
+answer ships with an independent audit verdict**.
 
-Paste a public GitHub URL, ask questions about the code in plain English, and
-get answers grounded in specific files and line ranges. **Every non-trivial
-answer ships with an independent audit verdict.**
+The interesting part is not the chat. It is that a second agent reviews the first
+one's work and is allowed to disagree with it, and that a deterministic checker
+resolves every cited line range against the actual checkout before either agent's
+opinion counts for anything.
 
-> *"Investigating shiftsync-fe — does this app actually protect routes?"
-> Audit: **Partial.** "The proxy middleware is described as active but no
-> middleware.ts file imports it — the protection mechanism may not be wired
-> up." That's the auditor catching a real architectural gap that the
-> investigator only hedged on.*
+![The landing page](docs/screenshots/landing.png)
+
+---
+
+## Run it
+
+```bash
+docker compose up --build
+```
+
+Then open **http://localhost:3100**. The API is on **http://localhost:4000/api**,
+with Swagger at **/api/docs**.
+
+**No credentials are required.** With no AWS keys present the API selects its
+offline LLM provider, which drives the same agent loop against the real checkout
+and cites real lines — so a fresh clone is fully demonstrable with one command.
+See [Running without credentials](#running-without-credentials) for what that
+does and does not prove.
+
+To use a live model, copy `investigator-be/.env.example` to `.env`, fill in the
+AWS values, and restart. Nothing else changes.
+
+<details>
+<summary>Running without Docker</summary>
+
+```bash
+# Postgres must be reachable at the DATABASE_URL in your .env
+cd investigator-be
+npm ci
+cp .env.example .env
+npx prisma migrate deploy
+npm run start:dev            # :4000
+
+cd ../investigator-fe
+npm ci
+cp .env.example .env
+npm run dev                  # :3000
+```
+</details>
+
+---
+
+## What happens when you ask a question
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant API as NestJS API
+    participant AG as Investigator agent
+    participant TL as Code tools
+    participant CK as Citation checker
+    participant AU as Auditor agent
+    participant DB as PostgreSQL
+
+    U->>API: POST /sessions { githubUrl }
+    API->>API: Stream tarball, cap size, strip unsafe entries
+    API-->>U: session id
+
+    U->>API: POST /sessions/:id/messages { content }
+    API->>DB: Enqueue job
+    API-->>U: 202 Accepted + jobId
+    U->>API: GET /jobs/:id/events (SSE)
+
+    Note over API,AG: A worker claims the job; the request is already done
+    API->>DB: Persist user message
+
+    loop up to 12 turns
+        AG->>TL: search_code / read_file / grep / list_dir / find_files
+        TL-->>AG: Results, confined to the repo root
+        AG-->>U: progress event (SSE)
+    end
+    AG-->>API: submit_answer + citations
+
+    API->>CK: Resolve each cited range against the checkout
+    CK-->>API: pass / fail, per citation
+
+    API->>AU: Question, answer, verified excerpts
+    AU-->>API: trusted | partial | suspect + reasons
+
+    Note over API: Final verdict is the worse of the two
+    API->>DB: Message + citations + verdict (one transaction)
+    API-->>U: done event -> client refetches the message
+```
+
+The final verdict is deliberately the **worse** of the deterministic result and
+the model's opinion. A confident auditor cannot upgrade an answer whose citations
+do not resolve.
+
+![An audited answer](docs/screenshots/audited-answer.png)
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph web["investigator-fe · Next.js 16"]
+        UI[Chat UI]
+        RQ[TanStack Query]
+    end
+
+    subgraph api["investigator-be · NestJS 11"]
+        WK[InvestigationWorker<br/>claims jobs · streams progress]
+        CH[ChatService<br/>orchestration + transaction]
+        AGN[AgentService<br/>tool loop]
+        AUD[AuditService]
+        CHK[AuditChecker<br/>deterministic]
+        ALM[AuditLlm]
+        CODE[CodeService<br/>sandboxed file tools]
+        REL[RelevanceService<br/>BM25 ranked search]
+        REPO[ReposService<br/>fetch · cap · evict]
+    end
+
+    subgraph llm["LLM layer"]
+        IFACE{{LlmProvider interface}}
+        BED[BedrockLlmProvider]
+        FAKE[FakeLlmProvider<br/>offline]
+        COST[LlmCostTracker]
+    end
+
+    PG[(PostgreSQL<br/>Prisma)]
+    GH[(GitHub tarball)]
+    FS[/Ephemeral checkout/]
+
+    UI --> RQ -->|POST, 202| WK
+    UI -->|SSE| WK
+    WK --> CH
+    CH --> AGN --> CODE
+    AGN --> REL
+    CH --> AUD --> CHK --> CODE
+    AUD --> ALM
+    AGN --> IFACE
+    ALM --> IFACE
+    IFACE -.selected at boot.-> BED
+    IFACE -.selected at boot.-> FAKE
+    IFACE --> COST
+    REPO --> GH
+    REPO --> FS
+    CODE --> FS
+    REL --> FS
+    CH --> PG
+    WK --> PG
+```
+
+### Why investigations are queued, not awaited
+
+A question costs several sequential model round-trips plus an audit pass. Held
+open inside the HTTP request, that regularly exceeded the 30–60 second idle
+timeout of any proxy in front of the service — so the client saw a dead
+connection while the work carried on invisibly.
+
+Now the request enqueues and returns `202` in milliseconds, and a worker claims
+the job with `SELECT ... FOR UPDATE SKIP LOCKED`. That choice matters: job state
+lives in Postgres rather than process memory, so a restart does not lose
+in-flight work, several API instances can share one queue without extra
+infrastructure, and a worker killed mid-run has its job reclaimed after a
+timeout. Progress is both persisted and broadcast, so a client that reconnects
+replays everything it missed.
+
+The visible payoff is that the UI shows the agent working:
+
+![Live investigation progress](docs/screenshots/live-progress.png)
+
+### Why the LLM sits behind an interface
+
+Every model call goes through `LlmProvider` rather than a vendor SDK. That single
+seam is what makes the rest possible:
+
+| Without it | With it |
+|---|---|
+| Tests need AWS credentials | 50 tests run offline in under a second |
+| A fresh clone cannot be demoed | `docker compose up` and it works |
+| Adding a vendor means editing the agent | Adding a vendor is one new file |
+| Token spend is invisible | Every call is priced and reported |
+
+Provider selection happens once, at boot, in `llm.module.ts`: an explicit
+`LLM_PROVIDER` env var wins; otherwise the presence of AWS credentials decides;
+otherwise the offline provider is used and the reason is logged.
+
+---
+
+## Running without credentials
+
+The offline provider is not a stub that returns a canned string. It runs the same
+investigation as the real agent — orient, rank, read, answer — by parsing the
+tool results already in the transcript and choosing its next move from what it
+actually observed.
+
+Because its citations are built from line ranges it genuinely read, the
+deterministic checker verifies them for real. The screenshot above is the offline
+provider: `4 tool calls`, a citation to `index.js:1-20`, and a **trusted** verdict
+earned by passing verification.
+
+**What this proves:** the agent loop, tool dispatch, path sandboxing, citation
+verification, audit aggregation, persistence and UI all work end to end.
+
+**What it does not prove:** answer quality. No model reasoned about the code. The
+offline auditor says so in its own verdict text rather than quietly claiming a
+clean bill of health.
+
+---
+
+## Retrieval
+
+The agent has five tools. Four are exact-match — `list_dir`, `read_file`,
+`grep` (literal string), `find_files` (path substring) — and they all fail the
+same way: when the question's vocabulary differs from the code's. Asking about
+"authentication" finds nothing in a repository whose file is `auth.ts`.
+
+`search_code` closes that gap. It ranks whole files with BM25 over
+identifier-aware tokens, splitting `issueToken` into `issue` and `token` and
+treating a shared four-character prefix as a shared root, so "authentication"
+reaches `auth.ts`. A filename hit is weighted heavily, because naming a file
+`auth.ts` is stronger evidence than one mention in a comment.
+
+It is deliberately lexical rather than dense. BM25 needs no model, no network
+and no credentials, so it runs in CI and in the offline demo; and on code —
+short, keyword-dense, full of exact identifiers — it is a strong baseline rather
+than a compromise. `RelevanceService.rank()` is the seam if dense retrieval is
+wanted later: inject an embedding provider and blend the scores.
+
+## Evaluation
+
+An LLM feature whose quality nobody measures is a guess. `npm test` scores the
+investigator against a fixture repository with known answers:
+
+```
+eval: provider=fake pass=3/3 recall=1 precision=1 p95=7ms usd=0
+```
+
+| Metric | Meaning |
+|---|---|
+| `citationRecall` | Did it cite the files that actually answer the question |
+| `citationPrecision` | Did its citations resolve against the source |
+| `verdict` | The audit standing each answer earned |
+| `p95`, `usd` | Latency and spend per question |
+
+The graders are deterministic — no model judges another model's output, so a
+score change means a real change in the system. The suite fails if precision
+drops below 1.0 (the agent invented a line range) or recall below 0.66 (it
+stopped finding the right file).
+
+This is not decoration. The first run scored **2/3, recall 0.67**: asked about
+"authentication tokens" it cited the rate limiter, because that file is a *token
+bucket* and says "tokens" far more often than `auth.ts` does. Stem expansion
+fixed it. That regression would have been invisible without a score.
+
+---
+
+## Security
+
+The system executes an agent's file operations against **an untrusted archive
+downloaded from the internet**, so containment is a core requirement rather than
+a hardening pass.
+
+| Risk | Control |
+|---|---|
+| `../` traversal | Lexical rejection before any filesystem call |
+| **Symlink escape** — a repo containing `docs/x -> /etc/passwd` | `realpath()` on every resolved path, re-checked for containment; directory walks skip symlinks; ripgrep runs `--no-follow` |
+| Malicious archive entries | `tar` filter accepts only regular files and directories, and rejects absolute or `..` paths |
+| Disk exhaustion | Archive stream aborted past 150 MB; clones evicted hourly past a 6-hour TTL |
+| Budget exhaustion | Rate limiting at 20 req/min and 200 req/hour |
+| Partial writes | Message, citations and verdict commit in one transaction |
+
+A string-only path check is the subtle one, and it is why `code.security.spec.ts`
+builds a real symlink pointing outside a real temp repo and asserts the read is
+refused.
 
 ---
 
@@ -19,275 +284,63 @@ answer ships with an independent audit verdict.**
 
 ```
 codebase-investigator/
-├── investigator-be/   NestJS API — agent loop, code tools, audit pipeline
-├── investigator-fe/   Next.js App Router — chat UI
-└── README.md          (this file)
+├── investigator-be/          NestJS API
+│   ├── src/agent/            Tool loop, tool schemas, prompts
+│   ├── src/audit/            Deterministic checker + LLM auditor
+│   ├── src/code/             Sandboxed list/read/grep/find
+│   ├── src/llm/              Provider interface, Bedrock, offline, cost
+│   ├── src/repos/            Archive fetch, size cap, TTL eviction
+│   ├── src/chat/             Orchestration and the write transaction
+│   ├── src/jobs/             Queue, worker, SSE progress
+│   ├── src/eval/             Scored evaluation harness
+│   └── prisma/               Schema and migrations
+└── investigator-fe/          Next.js App Router chat UI
 ```
 
-Both apps live in one git repo for convenience but deploy independently:
+## Tech stack
 
-- **Frontend** → Vercel (Root Directory: `investigator-fe`)
-- **Backend** → Railway (Root Directory: `investigator-be`)
+**Backend** NestJS 11 · TypeScript · Prisma 6 · PostgreSQL 17 · Anthropic on AWS
+Bedrock · Jest · Swagger
+**Frontend** Next.js 16 (App Router) · React 19 · TanStack Query v5 · Tailwind v4
+**Infrastructure** Docker Compose · multi-stage builds · non-root containers ·
+healthchecks
 
-## Stack
-
-| Layer | Choice | Why |
-| --- | --- | --- |
-| Backend | NestJS 11 + Prisma 6 | Mature DI / module system; matches my existing house style |
-| Database | Supabase Postgres | Persistence for sessions, messages, citations, audit verdicts |
-| LLM | AWS Bedrock — Claude Sonnet 4.5 | Same model handles investigator and auditor; different system prompts |
-| Code retrieval | `ripgrep` + Node `fs` | Grep-based retrieval beats embeddings for code |
-| Frontend | Next.js 16 (App Router) + React 19 | Server components by default, client only where needed |
-| Data | TanStack Query 5 | Server state, optimistic updates |
-| Style | Tailwind 4 | shadcn-ish utility components |
-
-## Local setup
-
-### 1. Backend
+## Tests
 
 ```bash
-cd investigator-be
-cp .env.example .env       # then fill DATABASE_URL, DIRECT_URL, AWS_*
-npm install
-npm run prisma:migrate     # first time only — creates tables in Supabase
-npm run start:dev          # http://localhost:4000/api
+cd investigator-be && npm test
 ```
 
-Swagger UI: <http://localhost:4000/api/docs>
+50 tests, no network and no credentials. The suite covers the offline provider's
+transcript parsing, the containment guarantees above, BM25 ranking, citation
+verification, GitHub URL parsing, and the scored evaluation.
 
-### 2. Frontend
+## Configuration
 
-```bash
-cd investigator-fe
-cp .env.example .env.local
-npm install
-npm run dev                # http://localhost:3000
-```
+Every variable is documented in `investigator-be/.env.example`, and all of them
+have working defaults. The ones worth knowing:
 
----
-
-## How the audit works
-
-The brief is explicit:
-
-> *"Self-scoring in the same prompt as the answer doesn't count.
-> The audit has to come from somewhere else — a different model, a different
-> prompt, a programmatic check, a separate context."*
-
-This system uses **two independent layers**, neither of which is the same
-call as the answer:
-
-### 1. Programmatic citation check
-
-For every `(file_path, line_start, line_end)` the agent submits, the checker:
-
-- Verifies the file exists in the cloned repo
-- Confirms the line range is valid (`start ≥ 1`, `end ≥ start`, `end ≤ totalLines`)
-- Reads the actual file content and stores it as the citation excerpt
-- Rejects whitespace-only ranges (you can't cite a blank block)
-
-This catches the most common hallucinations: invented file paths, off-by-large
-line numbers, citing files the agent never opened.
-
-The result is a `pass: boolean` plus per-citation annotations
-(`verified: true/false`).
-
-### 2. Independent LLM auditor
-
-A **second** Bedrock call, with:
-
-- A **different system prompt** that tells the model it is a skeptical reviewer,
-  not the answerer ([investigator-be/src/audit/audit.prompt.ts](investigator-be/src/audit/audit.prompt.ts))
-- **No tool access** — it cannot navigate the code on its own
-- The user question, the assistant answer, the programmatic check result, and
-  the **actual cited excerpts** as context
-- A strict JSON output contract (`status` + `reasons`)
-
-The auditor is told to look for: hallucinated citations, claims not supported
-by the cited code, suggested fixes that would break callers, logical gaps.
-
-### Combined verdict
-
-`status = min(programmaticImplied, llmStatus)`. If either layer downgrades the
-answer, the final verdict reflects that. The user sees the verdict as a colored
-badge next to the answer; clicking it reveals both layers' reasoning.
-
-### Real example from testing
-
-When I tested on my own `shiftsync-fe` repo with *"How does authentication
-work here?"*, the audit returned **Partial** with this reason:
-
-> *"The assistant correctly identifies that the proxy middleware includes a
-> Next.js config export but cannot find evidence it's actually imported in a
-> middleware.ts file… this is a significant architectural gap that affects
-> the core claim about how route protection works."*
-
-The audit was right. There is no `middleware.ts` in my own app — the proxy
-middleware is genuinely orphaned. The codebase investigator caught a real
-issue I hadn't noticed.
-
-When I followed up with *"so what actually protects routes today?"*, the
-agent did fresh investigation, sharpened its answer, and the audit returned
-**Trusted** — because the new claims were airtight. The audit is calibrated:
-it gives Partial when there's a real concern and Trusted when it's earned.
-
----
-
-## How multi-turn coherence works
-
-The brief calls out the failure modes:
-
-> *"...not repeat itself, not lose earlier claims, not silently drop context."*
-
-Each user message goes through `ChatService.sendMessage`, which:
-
-1. Loads the prior persisted messages for the session
-2. Builds an Anthropic-shaped history where each prior assistant turn carries
-   its citations inline (e.g. `[Prior citations: src/auth.ts:12-40]`)
-3. Sends `(history, new user message)` to the agent
-
-Citations are replayed inline so the model has its own prior factual claims
-visible — that's what lets it stay consistent or correct itself when pushed
-back. Tool-call traces are *not* replayed (would bloat context with no
-benefit).
-
-End-to-end test confirmed: when I pushed back on a hedged claim from turn 1,
-the agent acknowledged the earlier statement, did fresh investigation, and
-upgraded the answer rather than contradicting itself.
-
----
-
-## Architecture
-
-```
-HTTP (Next.js client)
-  │
-  └─→ POST /api/sessions/:id/messages
-        │
-        └─→ ChatService.sendMessage()
-              ├─→ load prior messages → build agent history
-              ├─→ AgentService.investigate()              ← Bedrock call #1
-              │     loop until submit_answer or max_turns:
-              │       model decides → tool dispatch (read_file/grep/list_dir/
-              │       find_files) → tool_result → model decides...
-              │
-              ├─→ AuditService.run()
-              │     ├─→ AuditChecker.check()              ← programmatic
-              │     │     verify each citation against the source
-              │     └─→ AuditLlm.audit()                  ← Bedrock call #2
-              │           skeptical reviewer, no tools
-              │
-              └─→ persist Message + Citations + AuditVerdict → return DTO
-```
-
-### Backend modules
-
-```
-src/
-├── repos/             clone GitHub URLs into /tmp, manage repo lifecycle
-├── code/              read_file, grep, list_dir, find_files (path-confined)
-├── database/          Prisma + repository pattern
-│   └── repositories/  one repository per aggregate
-├── sessions/          create/get session, list messages
-├── agent/             Bedrock tool-use loop, system prompt, 5 tools
-├── audit/             programmatic checker + LLM auditor + service
-├── chat/              REST endpoints, orchestration, multi-turn history
-├── common/            shared providers (Bedrock client)
-└── shared/            constants
-```
-
-### Tools the agent has
-
-- `list_dir(path)` — explore project structure
-- `read_file(path, line_start?, line_end?)` — inspect actual code
-- `grep(pattern, glob?, case_insensitive?)` — find symbols/strings (uses
-  `ripgrep` if available, falls back to a Node walker)
-- `find_files(pattern)` — locate files by name substring
-- `submit_answer({answer, citations[]})` — terminal tool; calling it ends the
-  loop with a structured payload
-
-`submit_answer` being a tool (not free-form text the server parses) means
-citations arrive as `{file_path, line_start, line_end}` objects every time —
-no fragile regex, no markdown escapes, no missed brackets.
-
-### Frontend conventions
-
-- `type Props = {...}` everywhere
-- Server components by default; `"use client"` only where state/handlers exist
-- TanStack Query owns server state (4 hooks: `useCreateSession`, `useSession`,
-  `useMessages`, `useSendMessage` with optimistic update)
-- Markdown rendering for assistant messages (`react-markdown` + GFM)
-
----
-
-## What I cut and why (one-day budget)
-
-The brief said *"we're watching how you scope, what you cut, and what you keep."*
-
-| Cut | Reason |
-| --- | --- |
-| Auth, accounts, sharing | Sessions are opaque-id-gated; nobody else needs to see them |
-| Streaming responses | Adds SSE complexity for ~10% UX gain. Answer + audit return atomically |
-| Embeddings / vector search | Grep is faster and more accurate for code questions |
-| Per-tenant Bedrock model splits | Shipped one model for both investigator and auditor; brief allows it |
-| Polished design system | Plain Tailwind, no shadcn pipeline. UI is functional, not beautiful |
-| Unit tests for the LLM auditor | Tested the *programmatic* checker (deterministic) — auditor is exercised end-to-end via real demo |
-| Mid-conversation repo switching | One repo per session. Want a different repo? Start a new session |
-| Persistent /tmp clones | Repos re-clone on demand if the cache is wiped |
-
-## What I kept sharp
-
-- **Citations are real and clickable.** Each one links to GitHub at the exact
-  line range (`/blob/HEAD/path#L23-L58`)
-- **Tool-call trace is visible to the user.** A collapsible `Tool calls (N)`
-  section lists everything the agent ran. Builds trust — they see what
-  actually happened
-- **The audit is calibrated, not noise.** Verdicts are Partial / Trusted /
-  Suspect with substantive reasons, not hand-waving confidence numbers
-- **Multi-turn coherence actually works.** Verified end-to-end with pushback
-  in testing
-- **Path-confinement on tool calls.** Agent can't escape the cloned repo with
-  `..` even if the model tries
-
-## Test status
-
-```
-21 unit tests passing across 4 suites:
-  - repos.service.spec.ts   (URL parsing, edge cases)
-  - code.service.spec.ts    (read_file, listDir, findFiles, grep, traversal guard)
-  - audit.checker.spec.ts   (citation verification, all failure modes)
-```
-
-The LLM-touching code (agent loop, LLM auditor) is exercised end-to-end in
-manual testing rather than via mocked unit tests — mocking the model defeats
-the point.
-
----
-
-## API contract (summary)
-
-```
-POST   /api/sessions               { githubUrl }      → Session
-GET    /api/sessions/:id                              → Session
-GET    /api/sessions/:id/messages                     → Message[]
-POST   /api/sessions/:id/messages  { content }        → Message (assistant reply
-                                                        with citations + audit)
-GET    /api/health                                    → { status: "ok" }
-```
-
-Full schema: <http://localhost:4000/api/docs> (Swagger UI).
-
----
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_PROVIDER` | auto | Force `fake` or `bedrock` regardless of credentials |
+| `AWS_ACCESS_KEY_ID` etc. | empty | Present ⇒ live model; absent ⇒ offline provider |
+| `DATABASE_URL` | compose value | Postgres connection |
+| `LLM_PRICE_INPUT_PER_MTOK` | `3.0` | Cost estimation, USD per million tokens |
+| `FAKE_LLM_DELAY_MS` | `600` in compose | Paces the offline demo so the progress stream is readable; `0` in tests |
+| `WORKER_CONCURRENCY` | `2` | Investigations run in parallel per instance |
 
 ## Known limitations
 
-- **Cold-start clone time.** First question on a new repo waits for `git
-  clone --depth 1`. ~3-15s depending on repo size
-- **No retry on Bedrock 429.** If you hit rate limits during a tool-use loop,
-  the request fails. Production would add exponential backoff
-- **Tool-call budget is fixed at 12 per turn.** Some questions could legitimately
-  need more on a large repo; agent will return a "ran out of turns" message
-- **`/tmp` cleanup not automated.** Cloned repos accumulate; rely on OS to
-  clean
-- **No streaming.** Users wait 15-45s on the first turn with no incremental
-  output. They see "investigating…" with animated dots
+- **No authentication.** Rate limiting bounds abuse, but anyone who can reach the
+  API can start a session.
+- **Retrieval is lexical, not semantic.** BM25 with stem expansion handles
+  vocabulary drift well, but a question that shares no word root with the code
+  ("how do we stop abuse?" → `rateLimit.ts`) still depends on the model
+  choosing good search terms. Dense retrieval is the next step, and
+  `RelevanceService.rank()` is where it goes.
+- **The eval scores the offline path.** It is a genuine regression gate on the
+  tools, the transcript format and the citation checker. Scoring answer
+  *quality* needs a live provider, which needs credentials.
+- **One queue, in-process workers.** The `SKIP LOCKED` design scales to several
+  API instances as-is, but there is no dead-letter queue and no retry backoff
+  beyond the claim timeout.
