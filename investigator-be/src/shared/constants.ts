@@ -21,6 +21,9 @@ export const MAX_TURNS_PER_INVESTIGATION = 12;
  * than trusting Content-Length (which a hostile origin controls).
  */
 export const MAX_REPO_ARCHIVE_BYTES = 150 * 1024 * 1024;
+export const MAX_REPO_EXPANDED_BYTES = 512 * 1024 * 1024;
+export const MAX_REPO_ENTRIES = 50_000;
+export const REPO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /** Clones older than this are evicted to stop /tmp growing without bound. */
 export const REPO_CACHE_TTL_MS = 6 * 60 * 60 * 1000;

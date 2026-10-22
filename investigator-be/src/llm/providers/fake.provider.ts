@@ -253,9 +253,9 @@ export class FakeLlmProvider implements LlmProvider {
             'range against the source, so the answer cannot be marked trusted.',
         }
       : {
-          status: 'trusted',
+          status: 'partial',
           reasons:
-            'Offline auditor: every citation was resolved against the checkout and the ' +
+            'Offline auditor: semantic review was not run. Every citation was resolved against the checkout and the ' +
             'cited ranges are non-empty. Note that no language model reviewed the ' +
             'reasoning — configure credentials for a substantive audit.',
         };

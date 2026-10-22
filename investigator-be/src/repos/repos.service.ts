@@ -14,6 +14,9 @@ import {
 import * as tar from 'tar';
 import {
   MAX_REPO_ARCHIVE_BYTES,
+  MAX_REPO_EXPANDED_BYTES,
+  MAX_REPO_ENTRIES,
+  REPO_DOWNLOAD_TIMEOUT_MS,
   REPO_CACHE_TTL_MS,
   REPO_CLONE_ROOT,
 } from '@/shared/constants';
@@ -70,10 +73,13 @@ export class ReposService {
     const tarballUrl = `https://codeload.github.com/${parsed.owner}/${parsed.name}/tar.gz/HEAD`;
     this.logger.log(`Fetching ${tarballUrl}`);
 
+    const signal = AbortSignal.timeout(REPO_DOWNLOAD_TIMEOUT_MS);
+    let entries = 0;
     let response: Response;
     try {
       response = await fetch(tarballUrl, {
         headers: { 'User-Agent': 'codebase-investigator' },
+        signal,
       });
     } catch (err) {
       await this.remove(sessionId).catch(() => undefined);
@@ -90,25 +96,34 @@ export class ReposService {
       );
     }
 
+    const extractor = tar.extract({
+      cwd: target,
+      strip: 1,
+      filter: (path, entry) => {
+        if (++entries > MAX_REPO_ENTRIES) {
+          extractor.abort(
+            new PayloadTooLargeException(
+              `Repository exceeds the ${MAX_REPO_ENTRIES} entry limit.`,
+            ),
+          );
+          return false;
+        }
+        // `entry` is a ReadEntry during extraction; narrow before reading
+        // .type so this holds under tar's Stats | ReadEntry union.
+        const type = (entry as { type?: string }).type;
+        if (type !== 'File' && type !== 'Directory') return false;
+        return !path.startsWith('/') && !path.split('/').includes('..');
+      },
+    });
+
     try {
       await pipeline(
         Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
         this.byteLimiter(MAX_REPO_ARCHIVE_BYTES, parsed.webUrl),
         createGunzip(),
-        // filter+ignore below refuse anything that is not a plain file or
-        // directory. Archives are untrusted input: a symlink entry pointing at
-        // /etc, or an absolute/../ path, must never reach the filesystem.
-        tar.extract({
-          cwd: target,
-          strip: 1,
-          filter: (path, entry) => {
-            // `entry` is a ReadEntry during extraction; narrow before reading
-            // .type so this holds under tar's Stats | ReadEntry union.
-            const type = (entry as { type?: string }).type;
-            if (type !== 'File' && type !== 'Directory') return false;
-            return !path.startsWith('/') && !path.split('/').includes('..');
-          },
-        }),
+        this.byteLimiter(MAX_REPO_EXPANDED_BYTES, parsed.webUrl),
+        extractor,
+        { signal },
       );
     } catch (err) {
       await this.remove(sessionId).catch(() => undefined);

@@ -222,6 +222,7 @@ export class CodeService {
   ): Promise<GrepResult> {
     return new Promise((res, rej) => {
       const args = [
+        '--fixed-strings',
         '--line-number',
         '--no-heading',
         '--color=never',
@@ -252,7 +253,7 @@ export class CodeService {
           const firstColon = rawLine.indexOf(':');
           const secondColon = rawLine.indexOf(':', firstColon + 1);
           if (firstColon === -1 || secondColon === -1) continue;
-          const path = rawLine.slice(0, firstColon);
+          const path = rawLine.slice(0, firstColon).replace(/^\.\//, '');
           const lineStr = rawLine.slice(firstColon + 1, secondColon);
           const text = rawLine.slice(secondColon + 1);
           const line = Number.parseInt(lineStr, 10);

@@ -215,12 +215,12 @@ describe('FakeLlmProvider', () => {
       messages: [{ role: 'user', content: prompt }],
     });
 
-    it('returns trusted JSON when the programmatic check passed', async () => {
+    it('keeps a citation-only check partial without a semantic reviewer', async () => {
       const res = await provider.complete(
         audit('All 2 citation(s) verified against the source.'),
       );
       const text = (res.content[0] as Anthropic.TextBlock).text;
-      expect(JSON.parse(text)).toMatchObject({ status: 'trusted' });
+      expect(JSON.parse(text)).toMatchObject({ status: 'partial' });
     });
 
     it('downgrades to partial when citations failed verification', async () => {

@@ -18,6 +18,7 @@ const STATUS_STYLES = {
 export function AuditBadge({ verdict }: Props) {
   const [open, setOpen] = useState(false);
   const style = STATUS_STYLES[verdict.status];
+  const citationOnly = verdict.llmReasons?.startsWith("Offline auditor:");
 
   return (
     <div className="inline-block">
@@ -28,7 +29,7 @@ export function AuditBadge({ verdict }: Props) {
         aria-expanded={open}
       >
         {/* The status dot is drawn by .chip::before, so none is needed here. */}
-        Audit: {style.label}
+        Audit: {citationOnly ? "Citation check only" : style.label}
         <span className="text-[10px] opacity-60">{open ? "▴" : "▾"}</span>
       </button>
       {open && (
@@ -54,9 +55,9 @@ export function AuditBadge({ verdict }: Props) {
           </div>
           <div>
             <div className="font-semibold text-foreground-2">
-              LLM auditor{" "}
+              {citationOnly ? "Semantic review not run" : "LLM auditor"}{" "}
               <span className="ml-1 font-normal text-foreground-2">
-                ({verdict.llmStatus})
+                ({citationOnly ? "offline mode" : verdict.llmStatus})
               </span>
             </div>
             <p className="mt-1 text-foreground-2 leading-relaxed">
