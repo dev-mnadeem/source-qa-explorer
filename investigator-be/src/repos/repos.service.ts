@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs';
+import { createWriteStream, existsSync } from 'node:fs';
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { ReadableStream as NodeReadableStream } from 'node:stream/web';
@@ -96,23 +96,37 @@ export class ReposService {
       );
     }
 
-    const extractor = tar.extract({
-      cwd: target,
-      strip: 1,
-      filter: (path, entry) => {
+    const writes: Promise<void>[] = [];
+    const extractor = new tar.Parser({
+      onReadEntry: (entry) => {
         if (++entries > MAX_REPO_ENTRIES) {
-          extractor.abort(
-            new PayloadTooLargeException(
-              `Repository exceeds the ${MAX_REPO_ENTRIES} entry limit.`,
-            ),
-          );
-          return false;
+          entry.resume();
+          extractor.abort(new PayloadTooLargeException(
+            `Repository exceeds the ${MAX_REPO_ENTRIES} entry limit.`,
+          ));
+          return;
         }
-        // `entry` is a ReadEntry during extraction; narrow before reading
-        // .type so this holds under tar's Stats | ReadEntry union.
-        const type = (entry as { type?: string }).type;
-        if (type !== 'File' && type !== 'Directory') return false;
-        return !path.startsWith('/') && !path.split('/').includes('..');
+        const parts = entry.path.split('/');
+        if (entry.path.startsWith('/') || parts.includes('..') || entry.path.includes('\\') ||
+            (entry.type !== 'File' && entry.type !== 'Directory')) {
+          entry.resume();
+          return;
+        }
+        const relative = parts.slice(1).join('/');
+        if (!relative) { entry.resume(); return; }
+        const output = join(target, relative);
+        const write = (async () => {
+          if (entry.type === 'Directory') {
+            await mkdir(output, { recursive: true });
+            entry.resume();
+          } else {
+            await mkdir(dirname(output), { recursive: true });
+            await pipeline(entry, createWriteStream(output, { flags: 'wx' }), { signal });
+          }
+        })();
+        // Observe failures immediately while retaining them for the final barrier.
+        void write.catch((error: Error) => extractor.abort(error));
+        writes.push(write);
       },
     });
 
@@ -125,7 +139,11 @@ export class ReposService {
         extractor,
         { signal },
       );
+      await Promise.all(writes);
     } catch (err) {
+      // Parser shutdown does not await outstanding filesystem writes. Drain them
+      // before removal so an unfinished mkdir cannot recreate the rejected cache.
+      await Promise.allSettled(writes);
       await this.remove(sessionId).catch(() => undefined);
       if (err instanceof PayloadTooLargeException) throw err;
       const message = err instanceof Error ? err.message : 'unknown error';
