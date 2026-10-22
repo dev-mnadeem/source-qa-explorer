@@ -89,3 +89,7 @@ The agent reads files from an untrusted downloaded archive, so file access is sa
 - No authentication. Anyone who can reach the API can start a session.
 - Retrieval is lexical only. Dense retrieval would slot into `RelevanceService.rank()`.
 - The evaluation only scores the offline path, so it doesn't measure answer quality.
+
+## Author
+
+[**Muhammad Nadeem**](https://github.com/dev-mnadeem)
